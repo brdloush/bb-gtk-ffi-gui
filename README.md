@@ -7,7 +7,7 @@ Same idea as [glimmer-ui](https://yogthos.net/posts/2026-08-29-glimmer-ui.html)
 (Reagent-style reactive atoms driving real native widgets), but using babashka's
 new [FFI](https://blog.michielborkent.nl/babashka-ffi.html) instead of Jolt.
 
-No JVM, no build step, no bindings to generate. `bb -m counter` and a native
+No JVM, no build step, no bindings to generate. `bb counter` and a native
 window appears.
 
 ## The counter
