@@ -7,7 +7,7 @@
   (let [n (r/atom 0)]
     (fn []
       [:vbox {:spacing 12 :margin 16}
-       [:label {:label (str "Count: " @n)}]
+       [:label "Count: " @n]
        [:hbox {:spacing 8}
         [:button {:label "- 1" :on-click #(swap! n dec)}]
         [:button {:label "+ 1" :on-click #(swap! n inc)}]

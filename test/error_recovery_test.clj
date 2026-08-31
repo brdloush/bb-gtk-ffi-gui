@@ -17,15 +17,15 @@
 (println "0) initial:" (live))
 (assert (= "ok 1" (live)))
 
-;; --- 1. a bare string where a child belongs -----------------------------
-(defn home [s] [:vbox {} [:label "foo!"]])
+;; --- 1. text on a container, which has no text of its own ---------------
+(defn home [_] [:vbox {} "oops"])
 (ui/refresh!) (settle)
 (println "1) loop survived a bad view:" (not (future-done? th)))
 (assert (not (future-done? th)) "the main loop died")
 (println "   last render kept:" (live))
 (assert (= "ok 1" (live)) "should hold the last good render")
 (println "   error recorded:" (:message @ui/last-error))
-(assert (re-find #"bare string" (:message @ui/last-error)))
+(assert (re-find #"has no text of its own" (:message @ui/last-error)))
 
 ;; --- 2. an unknown widget ------------------------------------------------
 (defn home [_] [:vbox {} [:slider {}]])

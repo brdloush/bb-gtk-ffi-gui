@@ -103,17 +103,20 @@
   {:vbox   (box-spec g/VERTICAL)
    :hbox   (box-spec g/HORIZONTAL)
 
-   :label  {:ctor  (fn [p] (g/label-new (str (:label p ""))))
+   :label  {:text-prop :label
+            :ctor  (fn [p] (g/label-new (str (:label p ""))))
             :apply (fn [w p changed]
                      (when (contains? changed :label)
                        (g/label-set-text w (str (:label p "")))))}
 
-   :button {:ctor  (fn [p] (g/button-new-with-label (str (:label p ""))))
+   :button {:text-prop :label
+            :ctor  (fn [p] (g/button-new-with-label (str (:label p ""))))
             :apply (fn [w p changed]
                      (when (contains? changed :label)
                        (g/button-set-label w (str (:label p "")))))}
 
-   :entry  {:ctor  (fn [p]
+   :entry  {:text-prop :value
+            :ctor  (fn [p]
                      (doto (g/entry-new)
                        (g/editable-set-text (str (:value p "")))))
             :apply (fn [w p changed]
@@ -124,7 +127,8 @@
                          (when (not= v (g/editable-get-text w))
                            (g/editable-set-text w v)))))}
 
-   :check  {:ctor  (fn [p]
+   :check  {:text-prop :label
+            :ctor  (fn [p]
                      (doto (g/check-button-new-with-label (str (:label p "")))
                        (g/check-button-set-active (g/->gbool (:active p)))))
             :apply (fn [w p changed]
@@ -139,19 +143,27 @@
 ;; hiccup normalization
 ;; ---------------------------------------------------------------------------
 
-(defn- bad-hiccup! [form parent]
-  (throw (ex-info (str "invalid hiccup "
-                       (if parent (str "inside " parent) "at the root of a view")
-                       ": " (pr-str form)
-                       "\n  expected a vector like [:label {:label \"hi\"}], a seq of those, or nil"
-                       (when (string? form)
-                         (str "\n  a bare string is not a child -- write [:label {:label "
-                              (pr-str form) "}]")))
-                  {:form form :parent parent})))
+(defn- text-like?
+  "A child that reads as content rather than as a widget."
+  [x]
+  (or (string? x) (number? x)))
+
+(defn- hiccup-error! [msg data]
+  (throw (ex-info msg data)))
+
+(defn- bad-child! [form parent]
+  (hiccup-error!
+   (str "invalid hiccup " (if parent (str "inside " parent) "at the root of a view")
+        ": " (pr-str form)
+        "\n  expected a vector like [:label \"hi\"], a string, a number, a seq of"
+        " those, or nil")
+   {:form form :parent parent}))
 
 (defn- normalize
-  "Expands function components and flattens seqs. Returns
-   {:tag kw :props map :children [normalized...]} or nil.
+  "Expands function components, flattens seqs, and folds text children into the
+   widget's text prop, so [:label \"Count: \" 3] means [:label {:label \"Count: 3\"}].
+
+   Returns {:tag kw :props map :children [normalized...]} or nil.
 
    Runs over the whole tree before `reconcile` touches a single widget, so a
    malformed view is rejected without half-mutating the window."
@@ -159,24 +171,47 @@
   ([form parent]
    (cond
      (nil? form) nil
-     (not (vector? form)) (bad-hiccup! form parent)
+     (not (vector? form)) (bad-child! form parent)
      :else
      (let [[tag & more] form]
        (if (fn? tag)
          (normalize (apply tag more) parent)
-         (let [props (if (map? (first more)) (first more) {})
-               kids  (if (map? (first more)) (rest more) more)]
-           (when-not (widgets tag)
-             (throw (ex-info (str "unknown widget " (pr-str tag)
-                                  "\n  known widgets: "
-                                  (clojure.string/join " " (sort (map str (keys widgets)))))
-                             {:tag tag :known (set (keys widgets))})))
+         (let [spec (or (widgets tag)
+                        (hiccup-error!
+                         (str "unknown widget " (pr-str tag)
+                              "\n  known widgets: "
+                              (clojure.string/join " " (sort (map str (keys widgets)))))
+                         {:tag tag :known (set (keys widgets))}))
+               props (if (map? (first more)) (first more) {})
+               kids  (->> (if (map? (first more)) (rest more) more)
+                          (mapcat #(if (seq? %) % [%]))
+                          (remove nil?))
+               _     (run! #(when-not (or (vector? %) (text-like? %))
+                              (bad-child! % tag))
+                           kids)
+               texts (remove vector? kids)
+               nodes (filterv vector? kids)
+               tprop (:text-prop spec)]
+           (when (and (seq texts) (nil? tprop))
+             (hiccup-error!
+              (str tag " has no text of its own: " (pr-str (vec texts))
+                   "\n  put the text in a child, e.g. [" tag " {} [:label "
+                   (pr-str (str (first texts))) "]]")
+              {:tag tag :texts (vec texts)}))
+           (when (and (seq texts) (contains? props tprop))
+             (hiccup-error!
+              (str tag " was given both a " tprop " prop and text children"
+                   "\n  drop one: [" tag " {" tprop " ...}] or [" tag " \"...\"]")
+              {:tag tag :prop tprop :texts (vec texts)}))
+           (when (and (seq nodes) (nil? (:append spec)))
+             (hiccup-error!
+              (str tag " cannot contain child widgets"
+                   "\n  wrap them in a :vbox or :hbox instead")
+              {:tag tag :children (count nodes)}))
            {:tag tag
-            :props props
-            :children (->> kids
-                           (mapcat #(if (seq? %) % [%]))
-                           (remove nil?)
-                           (mapv #(normalize % tag)))}))))))
+            :props (cond-> props
+                     (seq texts) (assoc tprop (apply str texts)))
+            :children (mapv #(normalize % tag) nodes)}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; reconciler

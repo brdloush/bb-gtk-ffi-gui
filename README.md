@@ -21,7 +21,7 @@ window appears.
   (let [n (r/atom 0)]
     (fn []
       [:vbox {:spacing 12 :margin 16}
-       [:label {:label (str "Count: " @n)}]
+       [:label "Count: " @n]
        [:hbox {:spacing 8}
         [:button {:label "- 1"   :on-click #(swap! n dec)}]
         [:button {:label "+ 1"   :on-click #(swap! n inc)}]
@@ -74,7 +74,7 @@ Structure the app so the view is a plain fn of state:
 ```clojure
 (defn home [state]
   [:vbox {:spacing 10 :margin 16}
-   [:label {:label (str "items: " (count (:items @state)))}]
+   [:label "items: " (count (:items @state))]
    ...])
 
 (defn app []
@@ -207,8 +207,8 @@ out of the real `GtkLabel`.
 
 ## When a view is broken
 
-A typo in a view -- `[:label "foo!"]` instead of `[:label {:label "foo!"}]` --
-used to freeze the window. The exception escaped `render!`, escaped the main
+A typo in a view -- a stray string, a misspelled widget -- used to freeze the
+window. The exception escaped `render!`, escaped the main
 loop, and killed the thread. Nothing pumped GTK after that, so the window sat
 there unresponsive, and because it died inside a `future` the error was
 swallowed: no message at all. `ui/close!` could not help either, since the loop
@@ -218,10 +218,9 @@ Now a failed render is contained. The window keeps pumping, the last good render
 stays on screen, and the error is printed:
 
 ```
-[gtk] render failed: invalid hiccup inside :label: "foo!"
-  expected a vector like [:label {:label "hi"}], a seq of those, or nil
-  a bare string is not a child -- write [:label {:label "foo!"}]
-       {:form "foo!", :parent :label}
+[gtk] render failed: :vbox has no text of its own: ["oops"]
+  put the text in a child, e.g. [:vbox {} [:label "oops"]]
+       {:tag :vbox, :texts ["oops"]}
 ```
 
 Fix the view, re-render, and it recovers. Nothing to restart.
@@ -311,6 +310,25 @@ The drain is bounded so a busy source cannot starve rendering.
 
 Common props: `:margin` `:sensitive` `:tooltip` `:hexpand` `:vexpand` `:class`
 Events: `:on-click` `:on-change` `:on-toggle` `:on-activate`
+
+### Text children
+
+Strings and numbers in the body fold into the widget's text prop, so these are
+the same thing:
+
+```clojure
+[:label "Count: " @n]
+[:label {:label (str "Count: " @n)}]
+```
+
+The target prop is `:label` for `:label`, `:button` and `:check`, and `:value`
+for `:entry`. It is declared per widget as `:text-prop`, and it behaves like any
+other prop -- diffed, patched, reactive.
+
+Four things are refused, each saying what to do instead: text on a container
+(`[:vbox {} "oops"]`), a prop and text children at once (`[:label {:label "a"}
+"b"]`), widget children under a leaf (`[:label "hi" [:button "no"]]`), and a
+child that is neither a vector, string, number, seq nor nil.
 
 Adding a widget is one entry in `gtk.core/widgets`:
 
