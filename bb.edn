@@ -1,1 +1,12 @@
-{:paths ["src" "examples"]}
+{:paths ["src" "examples"]
+
+ :tasks
+ {counter {:doc "Run the counter example (reactive GTK4 window)."
+           :task (exec 'counter/-main)}
+
+  todo    {:doc "Run the todo example (dynamic list, entry, check buttons)."
+           :task (exec 'todo/-main)}
+
+  test    {:doc "Run the reconciler and signal tests (headless-ish, no window)."
+           :task (do (load-file "test/reconcile_test.clj")
+                     (load-file "test/signals_test.clj"))}}}

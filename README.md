@@ -35,11 +35,11 @@ window appears.
 ## Run it
 
 ```bash
-bb -m counter    # the glimmer counter
-bb -m todo       # dynamic list, entry, check buttons
+bb counter    # the glimmer counter
+bb todo       # dynamic list, entry, check buttons
+bb test       # reconciler + signal checks, no window
 
-bb test/reconcile_test.clj
-bb test/signals_test.clj
+bb tasks      # list them
 ```
 
 Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`).
