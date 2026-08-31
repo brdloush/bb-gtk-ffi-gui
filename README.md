@@ -37,7 +37,7 @@ window appears.
 ```bash
 bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
-bb test       # reconciler, signal, REPL-reload and dev-helper checks
+bb test       # all seven test files (see Tests below)
 bb dev        # nREPL server on 1667, for editor-driven work
 
 bb tasks      # list them
@@ -328,10 +328,30 @@ The drain is bounded so a busy source cannot starve rendering.
 
 ## Widgets
 
-`:vbox` `:hbox` `:label` `:button` `:entry` `:check`
+Six of them. Each row lists what only that widget takes; every widget also takes
+the common props below.
 
-Common props: `:margin` `:sensitive` `:tooltip` `:hexpand` `:vexpand` `:class`
-Events: `:on-click` `:on-change` `:on-toggle` `:on-activate`
+| tag | own props | events | children |
+| --- | --- | --- | --- |
+| `:vbox` | `:spacing` (default 0) | -- | any number |
+| `:hbox` | `:spacing` (default 0) | -- | any number |
+| `:label` | `:label` | -- | text only |
+| `:button` | `:label` | `:on-click` | text only |
+| `:check` | `:label` `:active` | `:on-toggle` | text only |
+| `:entry` | `:value` | `:on-change` `:on-activate` | text only |
+
+Common props, on every widget:
+
+| prop | value | default when absent |
+| --- | --- | --- |
+| `:margin` | pixels, applied to all four sides | `0` |
+| `:sensitive` | truthy = clickable | enabled |
+| `:tooltip` | string | none |
+| `:hexpand` `:vexpand` | truthy = take spare space | `false` |
+| `:class` | a CSS class name, or a collection of them | none |
+
+Handler arguments: `:on-click` gets none, `:on-change` and `:on-activate` get the
+entry's current text, `:on-toggle` gets the new boolean.
 
 ### Text children
 
@@ -351,6 +371,7 @@ Four things are refused, each saying what to do instead: text on a container
 (`[:vbox {} "oops"]`), a prop and text children at once (`[:label {:label "a"}
 "b"]`), widget children under a leaf (`[:label "hi" [:button "no"]]`), and a
 child that is neither a vector, string, number, seq nor nil.
+`test/text_children_test.clj` covers all of it.
 
 Adding a widget is one entry in `gtk.core/widgets`:
 
@@ -361,6 +382,58 @@ Adding a widget is one entry in `gtk.core/widgets`:
                    (g/label-set-text w (str (:label p "")))))}
 ```
 
+## API
+
+### gtk.core
+
+| | |
+| --- | --- |
+| `(run component & opts)` | Opens a window and drives the main loop. Blocks. Opts: `:title` (`"babashka + gtk4"`), `:width` (360), `:height` (200). `component` is a fn of no args returning hiccup. |
+| `(refresh!)` | Re-render on the next loop turn. For code changes; state changes do it themselves. |
+| `(close!)` | Close the window and let `run` return. Safe from any thread. |
+| `current` | Atom: `{:window ptr :tree node :error e}` while a window is up, else nil. |
+| `last-error` | Atom: the last render or handler failure, `nil` after a good render. |
+| `widgets` | The widget table. Add a tag by adding an entry. |
+| `signals` | The `:on-*` prop to GTK signal table. |
+
+### gtk.ratom
+
+| | |
+| --- | --- |
+| `(atom init)` | Like `clojure.core/atom`, but a change marks the UI dirty. |
+| `(invalidate!)` | Mark dirty by hand. `gtk.core/refresh!` is this. |
+| `(set-invalidate! f)` | Wiring, called by `run`. You should not need it. |
+
+### gtk.dev
+
+| | |
+| --- | --- |
+| `(auto-refresh!)` / `(auto-refresh! ms)` | Re-render on a timer, default every 100ms. |
+| `(stop-auto-refresh!)` | Stop it. |
+| `(watch-ns! ns)` | Watch every fn currently interned in `ns`. Returns how many. |
+| `(defview name & body)` | `defn` that watches its own var. |
+| `(watch-var! v)` / `(unwatch-var! v)` | One var at a time. |
+| `(unwatch-all!)` | Drop every var watch. |
+| `(watch-files! & paths)` | Poll `.clj` mtimes, reload, re-render. Defaults to `"src"` and `"examples"`. |
+| `(stop-watching-files!)` | Stop it. |
+| `(status)` | What is running, and whether a window is up. |
+| `(stop!)` | Stop every dev helper. Leaves the window up. |
+
+## Tests
+
+`bb test` runs all of them. Each one drives real GTK and reads results back out
+of real widgets, not out of the reconciler's own tree.
+
+| file | what it pins down |
+| --- | --- |
+| `reconcile_test.clj` | a patched widget keeps its pointer; children grow, shrink; a changed tag replaces |
+| `signals_test.clj` | clicks fire; a handler re-supplied by a later render replaces the stale one |
+| `props_test.clj` | an explicit nil differs from an absent key; removal restores GTK defaults; css classes come off; a handler gained after creation connects |
+| `text_children_test.clj` | text children fold into the text prop; the four refusals |
+| `error_recovery_test.clj` | a bad view and a throwing handler leave the loop alive, and it recovers |
+| `repl_reload_test.clj` | redefine a view, `refresh!`, see it on screen |
+| `dev_test.clj` | all four `gtk.dev` mechanisms against a live window |
+
 ## Not done
 
 POC scope. Missing: keyed children (list reordering re-labels in place instead
@@ -368,6 +441,11 @@ of moving widgets), moving a widget whose tag changed back to its old position
 (it lands at the end of its parent), more widgets, multiple windows,
 `GtkApplication` integration, and path-based subscriptions instead of whole-tree
 diffing.
+
+Events are not checked against the widget. `[:label {:on-click f}]` connects
+`clicked` to a `GtkLabel`, which has no such signal: GLib prints a `CRITICAL`
+to stderr, the handler never fires, and nothing else breaks. The per-widget
+table above is the only thing telling you which events are real.
 
 No error is shown *in* the window -- it goes to stderr, so with no terminal in
 view a broken render looks like nothing happened.

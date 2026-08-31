@@ -32,8 +32,7 @@
                                       (fn [v] (vec (concat (subvec v 0 i)
                                                            (subvec v (inc i))))))}]])
        items)]
-     [:label {:label (str (count (filter :done? items)) " / " (count items) " done")}]
-     [:button {:label "Add" :on-click add! :sensitive (seq (str/trim draft))}]]))
+     [:label {:label (str (count (filter :done? items)) " / " (count items) " done")}]]))
 
 (defn app []
   (let [state (r/atom {:draft "" :items []})]

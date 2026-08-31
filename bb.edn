@@ -10,7 +10,7 @@
   dev     {:doc "Start an nREPL server, then connect your editor and see gtk.dev."
            :task (shell "bb" "nrepl-server" "1667")}
 
-  test    {:doc "Run all test files."
+  test    {:doc "Run all test files against real GTK."
            :task (doseq [f ["test/reconcile_test.clj"
                             "test/signals_test.clj"
                             "test/repl_reload_test.clj"
