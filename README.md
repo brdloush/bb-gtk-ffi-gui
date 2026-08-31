@@ -264,6 +264,21 @@ glimmer-ui avoids diffing altogether by having each widget subscribe to a path
 in the state. Diffing was simply the shorter route to a working POC; the
 subscription model is the natural next step.
 
+### Props that appear and disappear
+
+Diffing props has two traps, both of which produced silently broken widgets.
+
+**An explicit nil is not the same as an absent key.** `:sensitive (seq "")` is
+`:sensitive nil`, and comparing with plain `get` made that look identical to no
+`:sensitive` at all -- so it never reached the widget and the button stayed
+enabled. The diff compares through a sentinel instead, so a present-but-nil prop
+counts as a change.
+
+**A removed prop must fall back to its GTK default, not to nil.** Dropping
+`:sensitive` re-enables the widget; dropping `:margin` goes to 0; dropping
+`:hexpand` goes to false. CSS classes are diffed as sets, so a class that leaves
+the vector is actually removed.
+
 ### Signals and the stale-closure trap
 
 An event handler closes over the state as it was *at the time of that render*.
@@ -284,9 +299,16 @@ handler out of a holder atom. Re-renders just `reset!` the holder:
 ```
 
 The callback lives in `ffi/global-arena`, so GTK can never call a pointer whose
-arena has been released. `test/signals_test.clj` covers the stale case: it
-clicks, re-renders, then clicks a handler that captured the old value and checks
-it sees the new one.
+arena has been released.
+
+A widget can also *gain* a handler in a later render -- you add an `:on-click` to
+a button that is already on screen. There was no holder for it, so nothing was
+ever connected and that button stayed dead for as long as it lived. Handlers are
+now connected lazily on each sync, not only at creation.
+
+`test/signals_test.clj` covers the stale case: it clicks, re-renders, then clicks
+a handler that captured the old value and checks it sees the new one.
+`test/props_test.clj` covers the appearing, disappearing and nil cases.
 
 ### Main loop
 
@@ -342,9 +364,10 @@ Adding a widget is one entry in `gtk.core/widgets`:
 ## Not done
 
 POC scope. Missing: keyed children (list reordering re-labels in place instead
-of moving widgets), prop *removal* (setting a prop back to nil is ignored),
-CSS class removal, more widgets, multiple windows, `GtkApplication` integration,
-and path-based subscriptions instead of whole-tree diffing.
+of moving widgets), moving a widget whose tag changed back to its old position
+(it lands at the end of its parent), more widgets, multiple windows,
+`GtkApplication` integration, and path-based subscriptions instead of whole-tree
+diffing.
 
 No error is shown *in* the window -- it goes to stderr, so with no terminal in
 view a broken render looks like nothing happened.

@@ -33,6 +33,7 @@
 (defcfn widget-set-margin-start "gtk_widget_set_margin_start" [:pointer :int] :void)
 (defcfn widget-set-margin-end "gtk_widget_set_margin_end" [:pointer :int] :void)
 (defcfn widget-add-css-class "gtk_widget_add_css_class" [:pointer :string] :void)
+(defcfn widget-remove-css-class "gtk_widget_remove_css_class" [:pointer :string] :void)
 
 ;; -- box --------------------------------------------------------------------
 (defcfn box-new "gtk_box_new" [:int :int] :pointer)

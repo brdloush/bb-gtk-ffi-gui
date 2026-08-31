@@ -16,6 +16,7 @@
                             "test/repl_reload_test.clj"
                             "test/dev_test.clj"
                             "test/error_recovery_test.clj"
-                            "test/text_children_test.clj"]]
+                            "test/text_children_test.clj"
+                            "test/props_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}

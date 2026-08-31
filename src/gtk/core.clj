@@ -12,6 +12,7 @@
    properties that actually changed are pushed into GTK. No widget is rebuilt
    unless its tag changed."
   (:require [babashka.ffi :as ffi]
+            [clojure.set]
             [clojure.string]
             [gtk.ffi :as g]
             [gtk.ratom :as r]))
@@ -67,24 +68,33 @@
 ;; common props
 ;; ---------------------------------------------------------------------------
 
-(defn- apply-common! [w props changed]
+(defn- ->classes [c]
+  (cond (nil? c) #{} (string? c) #{c} :else (set c)))
+
+(defn- apply-common!
+  "Pushes the common props. A prop that has been *removed* falls back to its
+   GTK default rather than to nil, so dropping :sensitive re-enables the widget
+   instead of disabling it."
+  [w props prev-props changed]
   (when (contains? changed :sensitive)
-    (g/widget-set-sensitive w (g/->gbool (:sensitive props))))
+    (g/widget-set-sensitive w (g/->gbool (get props :sensitive true))))
   (when (contains? changed :tooltip)
     (g/widget-set-tooltip-text w (:tooltip props)))
   (when (contains? changed :hexpand)
-    (g/widget-set-hexpand w (g/->gbool (:hexpand props))))
+    (g/widget-set-hexpand w (g/->gbool (get props :hexpand false))))
   (when (contains? changed :vexpand)
-    (g/widget-set-vexpand w (g/->gbool (:vexpand props))))
+    (g/widget-set-vexpand w (g/->gbool (get props :vexpand false))))
   (when (contains? changed :margin)
-    (let [m (:margin props)]
+    (let [m (get props :margin 0)]
       (g/widget-set-margin-top w m)
       (g/widget-set-margin-bottom w m)
       (g/widget-set-margin-start w m)
       (g/widget-set-margin-end w m)))
   (when (contains? changed :class)
-    (doseq [c (let [c (:class props)] (if (string? c) [c] c))]
-      (g/widget-add-css-class w c))))
+    (let [old (->classes (:class prev-props))
+          new (->classes (:class props))]
+      (doseq [c (clojure.set/difference old new)] (g/widget-remove-css-class w c))
+      (doseq [c (clojure.set/difference new old)] (g/widget-add-css-class w c)))))
 
 ;; ---------------------------------------------------------------------------
 ;; widget specs
@@ -221,17 +231,49 @@
 
 (defn- prop-keys [props] (set (keys props)))
 
-(defn- sync-props! [node props prev-props]
-  (let [{:keys [tag widget handlers]} node
-        spec    (widgets tag)
-        changed (into #{}
-                      (remove #(= (get props %) (get prev-props %)))
-                      (into (prop-keys props) (prop-keys prev-props)))]
-    ;; handlers: just swap the fn inside the holder, connection stays put
+(def ^:private absent
+  "Marks a key that is not there, so an explicit nil counts as a change.
+   Without this, :sensitive nil -- which is what (seq \"\") gives you -- reads
+   the same as no :sensitive at all and never reaches the widget."
+  ::absent)
+
+(defn- changed-props [props prev-props]
+  (into #{}
+        (remove #(= (get props % absent) (get prev-props % absent)))
+        (into (prop-keys props) (prop-keys prev-props))))
+
+(defn- ensure-handlers!
+  "Returns the widget's handler holders, connecting any signal it did not have
+   at creation time.
+
+   A widget can gain a handler in a later render -- you add an :on-click to a
+   button that is already on screen. Without this, no holder exists, nothing is
+   ever connected, and that button stays dead for as long as it lives."
+  [widget handlers props]
+  (reduce (fn [hs prop]
+            (if (contains? hs prop)
+              hs
+              (let [holder (atom (get props prop))]
+                (connect! widget prop holder)
+                (assoc hs prop holder))))
+          handlers
+          (filter #(contains? props %) (keys signals))))
+
+(defn- sync-props!
+  "Pushes changed props into the widget. Returns the node, whose :handlers may
+   have grown."
+  [node props prev-props]
+  (let [{:keys [tag widget]} node
+        spec     (widgets tag)
+        changed  (changed-props props prev-props)
+        handlers (ensure-handlers! widget (:handlers node) props)]
+    ;; swap the fn inside each holder; the GTK connection itself stays put.
+    ;; a prop that went away leaves nil behind, which the callback ignores.
     (doseq [[prop holder] handlers]
       (reset! holder (get props prop)))
-    (apply-common! widget props changed)
-    ((:apply spec) widget props changed)))
+    (apply-common! widget props prev-props changed)
+    ((:apply spec) widget props changed)
+    (assoc node :handlers handlers)))
 
 (defn- create [{:keys [tag props children] :as vnode}]
   (let [spec     (widgets tag)
@@ -242,7 +284,7 @@
         node     (assoc vnode :widget widget :handlers handlers)]
     (doseq [[prop holder] handlers]
       (connect! widget prop holder))
-    (apply-common! widget props (prop-keys props))
+    (apply-common! widget props {} (prop-keys props))
     ((:apply spec) widget props #{})            ; ctor already set the basics
     (assoc node :children
            (mapv (fn [child]
@@ -272,8 +314,8 @@
     ;; same kind -> patch in place
     :else
     (let [spec (widgets (:tag new-vnode))
-          node (assoc old-node :props (:props new-vnode))]
-      (sync-props! node (:props new-vnode) (:props old-node))
+          node (-> (assoc old-node :props (:props new-vnode))
+                   (sync-props! (:props new-vnode) (:props old-node)))]
       (let [olds (:children old-node)
             news (:children new-vnode)
             kept (mapv (fn [o n] (reconcile spec (:widget node) o n))
