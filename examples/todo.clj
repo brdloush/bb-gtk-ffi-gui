@@ -37,24 +37,32 @@
 (defn app []
   (let [state (r/atom {:draft "" :items []})]
     (fn []
-      (#'home state))))
+      (home state))))
 
 (defn -main [& _]
   (ui/run (app) :title "todo" :width 420 :height 320))
 
 (comment
-  ;; 1. start it on its own thread so the REPL prompt stays free
+  ;; start it on its own thread so the REPL prompt stays free
   (def app-thread (future (ui/run (app) :title "todo" :width 420 :height 320)))
 
-  ;; 2. edit `home` above, re-evaluate it, then re-render.
-  ;;    `app` calls it through #'home, so the new code is picked up.
-  ;;    Redefining a fn does not touch any atom, so nothing marks the tree
-  ;;    dirty by itself -- that is what refresh! is for.
+  ;; Pick one and you can edit `home` above, hit eval, and see it immediately.
+  (require '[gtk.dev :as dev])
+
+  (dev/auto-refresh!)        ; re-render on a timer. no registration, catches all
+  (dev/watch-ns! 'todo)      ; re-render when a fn already in this ns is redefined
+  (dev/watch-files! "src" "examples")   ; or edit and save, with no REPL at all
+
+  (dev/status)
+
+  ;; Without any of those, a redef sits pending until something re-renders --
+  ;; either an interaction that changes state, or:
   (ui/refresh!)
 
-  ;; 3. poke at the live tree
+  ;; poke at the live tree
   (:window @ui/current)
   (-> @ui/current :tree :children)
 
-  ;; 4. shut the window and let the loop return
+  ;; shut it all down
+  (dev/stop!)
   (ui/close!))

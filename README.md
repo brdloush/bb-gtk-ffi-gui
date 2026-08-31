@@ -37,7 +37,8 @@ window appears.
 ```bash
 bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
-bb test       # reconciler, signal and REPL-reload checks
+bb test       # reconciler, signal, REPL-reload and dev-helper checks
+bb dev        # nREPL server on 1667, for editor-driven work
 
 bb tasks      # list them
 ```
@@ -54,22 +55,21 @@ its watch marks the tree dirty, the loop notices, and only the props that
 actually changed get pushed into GTK.
 
 **Code changes are not.** Redefining a function touches no atom, so nothing
-marks the tree dirty and the window keeps showing the old render. Two things
-make a redef land:
+marks the tree dirty and the window keeps showing the old render, even though
+the new code is already loaded.
 
-1. reach the view **through a var**, so the new fn is picked up:
-   `(#'home state)`, not `(home state)`
-2. re-render, either by calling `(ui/refresh!)` or by doing anything in the UI
-   that changes state
+You do *not* need `#'home` for this. A plain call like `(home state)` resolves
+through the var at call time in babashka, exactly as on the JVM, so a redef is
+picked up on the next render. All that is missing is the render.
 
-That second point is easy to miss. A redef sits there pending until *something*
-re-renders. Type into an entry, tick a checkbox, click a button -- the resulting
-`swap!` marks the tree dirty, and the very next render already uses your new
-code. So `ui/refresh!` is really just "re-render now, without touching the UI".
+So a redef sits pending until *something* re-renders. Type into an entry, tick a
+checkbox, click a button -- the resulting `swap!` marks the tree dirty, and the
+very next render already uses your new code. `ui/refresh!` is just "re-render
+now, without touching the UI", and `gtk.dev` automates that away entirely.
 
 ### Setting it up
 
-Structure the app so the view is a plain fn of state, called through its var:
+Structure the app so the view is a plain fn of state:
 
 ```clojure
 (defn home [state]
@@ -79,7 +79,7 @@ Structure the app so the view is a plain fn of state, called through its var:
 
 (defn app []
   (let [state (r/atom {:draft "" :items []})]
-    (fn [] (#'home state))))          ; <- the var, not the fn
+    (fn [] (home state))))
 ```
 
 `run` blocks, so start it on its own thread and keep the handle:
@@ -118,11 +118,11 @@ both happen back on the GTK thread.
 
 ### Gotchas
 
-- `(home state)` captures the fn as it is now. Redefining `home` will not be
-  seen. Use `(#'home state)`.
+- Calling a fn never captures it, so redefining works. Passing it as a **value**
+  does capture: `(def v home)` or `(map home xs)` freeze the fn as it is now.
 - Re-evaluating `(ui/run (app) ...)` calls `(app)` again, which builds a **fresh**
   `r/atom`, so your state resets. To keep state across restarts, move it to a
-  top-level `def`.
+  top-level `defonce`.
 - One window at a time. `ui/current` is a single atom, so `refresh!` and `close!`
   act on the most recently started window.
 
@@ -136,15 +136,85 @@ calls `refresh!`, then reads the text back out of the real `GtkLabel`:
 4) after ui/refresh!: NEW 8 123
 ```
 
+## Dev helpers
+
+`gtk.dev` removes the manual `refresh!`. Four mechanisms; pick one, or compose
+them. Nothing here is needed at runtime.
+
+| | what it catches | you must | cost |
+| --- | --- | --- | --- |
+| `(dev/auto-refresh!)` | everything | keep views pure | ~0.3% of a core |
+| `(dev/watch-ns! 'todo)` | fns already interned when it ran | re-run it after adding a fn | none |
+| `(dev/defview home [st] ...)` | that one var | use `defview` instead of `defn` | none |
+| `(dev/watch-files! "src" "examples")` | anything saved to disk | `defonce` for state | a `stat` every 300ms |
+
+```clojure
+(require '[gtk.dev :as dev])
+
+(dev/auto-refresh!)        ; re-render on a timer. no registration at all
+(dev/watch-ns! 'todo)      ; event-driven, no wasted renders
+(dev/watch-files! "src")   ; edit and save, no REPL attached
+
+(dev/status)               ; what is running
+(dev/stop!)                ; stop all of it (leaves the window up)
+```
+
+### auto-refresh!
+
+Re-renders on a timer whether anything changed or not. A no-op re-render of ~90
+widgets measures **0.28 ms**, so at the default 100 ms interval this is well
+under 1% of a core, and the dirty flag was never buying much.
+
+Nothing to register and nothing to remember. It catches a redefined view, a
+redefined nested component, a whole namespace reload, a changed top-level value.
+
+The one rule: **views must be pure.** They now run 10 times a second, so a
+`println` or a `swap!` inside one fires continuously.
+
+### watch-ns! and defview
+
+Babashka vars support `add-watch`, and a plain `(defn home ...)` redef fires it --
+repeatedly, because the watch survives the redef. So these are event-driven: no
+polling and no wasted renders.
+
+`watch-ns!` arms every fn currently interned in a namespace. A fn you define
+*afterwards* is not covered, since there was nothing to watch at the time. Either
+re-run it, or declare views with `defview`, which arms itself:
+
+```clojure
+(dev/defview home [state]
+  [:vbox {} [:label {:label (str "items: " (count (:items @state)))}]])
+```
+
+The ordering works out: a redef fires the watch armed by the previous definition,
+then re-arms under the same key. So the first eval arms it, and every later eval
+both refreshes and re-arms. Forget `defview` on one view and that view silently
+stops live-updating -- which is the trade against `auto-refresh!`.
+
+### watch-files!
+
+Polls `.clj` mtimes, `load-file`s what changed, then re-renders. The only option
+that needs no REPL: save in your editor and the window updates. A syntax error in
+a half-saved file is reported and the watcher keeps going.
+
+`load-file` re-runs the file's top-level forms, so a top-level `(def state
+(r/atom ...))` is rebuilt on every save. Use `defonce`, or keep state inside the
+fn `run` closes over -- which is what the todo example does, so its items survive
+a save. Keep `ui/run` out of the top level or a save opens a second window.
+
+`test/dev_test.clj` drives all four against a live window and reads the results
+out of the real `GtkLabel`.
+
 ## How it works
 
-Three small namespaces:
+Three small namespaces, plus one for dev comfort:
 
 | File | Job |
 | --- | --- |
 | `src/gtk/ffi.clj` | `defcfn` bindings for the ~30 GTK4/GObject symbols the POC uses |
 | `src/gtk/ratom.clj` | reactive atom: a normal atom whose watch marks the UI dirty |
 | `src/gtk/core.clj` | hiccup -> widgets, plus a reconciler and the main loop |
+| `src/gtk/dev.clj` | dev-only: var watches, auto-refresh, file watching |
 
 ### Rendering
 
@@ -223,3 +293,7 @@ POC scope. Missing: keyed children (list reordering re-labels in place instead
 of moving widgets), prop *removal* (setting a prop back to nil is ignored),
 CSS class removal, more widgets, multiple windows, `GtkApplication` integration,
 and path-based subscriptions instead of whole-tree diffing.
+
+`gtk.dev` is dev-only and unpolished too: one window at a time, `watch-files!`
+polls rather than using inotify, and there is no `require`-graph awareness, so
+reloading a file does not reload the files that depend on it.

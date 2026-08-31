@@ -7,9 +7,13 @@
   todo    {:doc "Run the todo example (dynamic list, entry, check buttons)."
            :task (exec 'todo/-main)}
 
-  test    {:doc "Run the reconciler and signal tests (headless-ish, no window)."
+  dev     {:doc "Start an nREPL server, then connect your editor and see gtk.dev."
+           :task (shell "bb" "nrepl-server" "1667")}
+
+  test    {:doc "Run all test files."
            :task (doseq [f ["test/reconcile_test.clj"
                             "test/signals_test.clj"
-                            "test/repl_reload_test.clj"]]
+                            "test/repl_reload_test.clj"
+                            "test/dev_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}
