@@ -42,6 +42,7 @@
 ;; -- label ------------------------------------------------------------------
 (defcfn label-new "gtk_label_new" [:string] :pointer)
 (defcfn label-set-text "gtk_label_set_text" [:pointer :string] :void)
+(defcfn label-get-text "gtk_label_get_text" [:pointer] :string)
 
 ;; -- button -----------------------------------------------------------------
 (defcfn button-new-with-label "gtk_button_new_with_label" [:string] :pointer)

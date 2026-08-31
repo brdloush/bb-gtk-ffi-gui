@@ -222,9 +222,35 @@
   {:append (fn [win child] (g/window-set-child win child))
    :remove (fn [win _child] (g/window-set-child win nil))})
 
+(defonce ^{:doc "The running app, for REPL poking: {:window ptr :tree node}.
+  Single window, so a single atom is enough for the POC."}
+  current
+  (atom nil))
+
+(defn refresh!
+  "Forces a re-render on the next main-loop turn.
+
+   State changes do this on their own. Redefining a function does not: the
+   reactive atoms never saw it. So after re-evaluating a view fn at the REPL,
+   call this to make the running window pick it up.
+
+   For that to work the view must be reached through a var, not captured:
+
+     (fn [] (#'home state))   ; re-evaluating home is seen
+     (fn [] (home state))     ; the old fn stays captured"
+  []
+  (r/invalidate!))
+
 (defn run
   "Opens a window, renders `component` (a fn returning hiccup) into it and
-   drives the GTK main loop until the window is closed."
+   drives the GTK main loop until the window is closed.
+
+   Blocks. At the REPL, start it on its own thread so the prompt stays free:
+
+     (def app-thread (future (ui/run (app) :title \"todo\")))
+
+   Every GTK call then happens on that thread, which is what GTK requires.
+   `refresh!` and `swap!` from the REPL only set a flag, so they are safe."
   [component & {:keys [title width height]
                 :or   {title "babashka + gtk4" width 360 height 200}}]
   (g/gtk-init)
@@ -234,7 +260,9 @@
         tree    (volatile! nil)
         render! (fn []
                   (vreset! dirty false)
-                  (vreset! tree (reconcile root-spec win @tree (normalize (component)))))]
+                  (vreset! tree (reconcile root-spec win @tree (normalize (component))))
+                  (swap! current assoc :tree @tree))]
+    (reset! current {:window win :tree nil})
     (g/window-set-title win title)
     (g/window-set-default-size win width height)
     (let [cb (ffi/callback (ffi/global-arena)

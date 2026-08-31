@@ -8,5 +8,8 @@
            :task (exec 'todo/-main)}
 
   test    {:doc "Run the reconciler and signal tests (headless-ish, no window)."
-           :task (do (load-file "test/reconcile_test.clj")
-                     (load-file "test/signals_test.clj"))}}}
+           :task (doseq [f ["test/reconcile_test.clj"
+                            "test/signals_test.clj"
+                            "test/repl_reload_test.clj"]]
+                   (println (str "\n== " f))
+                   (shell "bb" f))}}}

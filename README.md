@@ -37,7 +37,7 @@ window appears.
 ```bash
 bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
-bb test       # reconciler + signal checks, no window
+bb test       # reconciler, signal and REPL-reload checks
 
 bb tasks      # list them
 ```
@@ -108,6 +108,40 @@ Babashka has no GTK main loop to hand over to, so `run` drives it:
 
 `g_main_context_iteration` is called non-blocking so the dirty check gets a turn.
 The drain is bounded so a busy source cannot starve rendering.
+
+### REPL workflow
+
+Two different kinds of change, and only one of them is automatic.
+
+A **state** change is seen on its own -- that is what the reactive atom watch is
+for. A **code** change is not: redefining a function touches no atom, so nothing
+marks the tree dirty and the window keeps showing the old render. `ui/refresh!`
+is the manual nudge.
+
+Two things are needed for a redef to actually land:
+
+1. reach the view through a var, so the new fn is picked up
+   -- `(#'home state)`, not `(home state)`
+2. call `(ui/refresh!)` afterwards
+
+```clojure
+;; start it off-thread so the prompt stays free
+(def app-thread (future (ui/run (app) :title "todo")))
+
+;; edit home, re-evaluate it, then
+(ui/refresh!)
+
+;; poke at the live widgets
+(:window @ui/current)
+(-> @ui/current :tree :children)
+
+(future-cancel app-thread)
+```
+
+Every GTK call happens on the thread that ran `gtk_init`, which is what GTK
+requires. `refresh!` and `swap!` from the REPL only flip a flag, so calling them
+from another thread is safe. `test/repl_reload_test.clj` drives this whole loop
+and reads the text back out of the real `GtkLabel`.
 
 ## Widgets
 

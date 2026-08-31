@@ -9,6 +9,13 @@
 
 (defn set-invalidate! [f] (reset! invalidate-fn f))
 
+(defn invalidate!
+  "Marks the UI dirty by hand. Safe to call from any thread: it only flips a
+   flag, and the render itself happens on the thread running the GTK loop."
+  []
+  (@invalidate-fn)
+  nil)
+
 (defn atom
   "Like clojure.core/atom, but changes schedule a re-render."
   [init]
