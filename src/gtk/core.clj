@@ -37,7 +37,9 @@
     nil))
 
 (def signals
-  "hiccup prop -> GTK signal + how to call the user's handler."
+  "hiccup prop -> GTK signal + how to call the user's handler.
+   An atom so an optional namespace can add its own."
+  (atom
   {:on-click  {:signal "clicked"
                :invoke (fn [f _w] (f))}
    :on-change {:signal "changed"
@@ -45,14 +47,14 @@
    :on-toggle {:signal "toggled"
                :invoke (fn [f w] (f (g/<-gbool (g/check-button-get-active w))))}
    :on-activate {:signal "activate"
-                 :invoke (fn [f w] (f (g/editable-get-text w)))}})
+                 :invoke (fn [f w] (f (g/editable-get-text w)))}}))
 
 (defn- connect!
   "Connects one GTK signal to a stable C callback that reads the current
    handler out of `holder`. The closure captured at creation time therefore
    never goes stale when a later render supplies a new handler fn."
   [widget prop holder]
-  (let [{:keys [signal invoke]} (signals prop)
+  (let [{:keys [signal invoke]} (@signals prop)
         cb (ffi/callback (ffi/global-arena)
                          (fn [_instance _data]
                            ;; never let an exception cross back into C
@@ -68,8 +70,15 @@
 ;; common props
 ;; ---------------------------------------------------------------------------
 
-(defn- ->classes [c]
-  (cond (nil? c) #{} (string? c) #{c} :else (set c)))
+(defn- ->classes
+  "A :class prop is one name or a collection of them. nils are dropped -- it is
+   easy to build a class list with a hole in it, and GTK only complains at
+   runtime with a CRITICAL."
+  [c]
+  (cond
+    (nil? c)    #{}
+    (string? c) #{c}
+    :else       (into #{} (remove nil?) c)))
 
 (defn- apply-common!
   "Pushes the common props. A prop that has been *removed* falls back to its
@@ -105,11 +114,24 @@
    :apply     (fn [w p changed]
                 (when (contains? changed :spacing)
                   (g/box-set-spacing w (or (:spacing p) 0))))
-   :append    g/box-append
-   :remove    g/box-remove
+   :append    (fn [parent child _props] (g/box-append parent child))
+   :remove    (fn [parent child _props] (g/box-remove parent child))
    :container true})
 
 (def widgets
+  "tag -> widget spec. An atom so an optional namespace -- gtk.adw, say -- can
+   register its own tags without core knowing they exist.
+
+   A spec is:
+     :ctor       (fn [props] ptr)
+     :apply      (fn [widget props changed-key-set] ...)
+     :text-prop  which prop string/number children fold into  (optional)
+     :append     (fn [parent child-ptr child-props] ...)       (containers only)
+     :remove     (fn [parent child-ptr child-props] ...)       (containers only)
+
+   `child-props` is there so a container can honour a :slot prop, which is how
+   libadwaita's prefix/suffix/top-bar slots are addressed."
+  (atom
   {:vbox   (box-spec g/VERTICAL)
    :hbox   (box-spec g/HORIZONTAL)
 
@@ -147,7 +169,21 @@
                      (when (contains? changed :active)
                        (let [v (g/->gbool (:active p))]
                          (when (not= v (g/check-button-get-active w))
-                           (g/check-button-set-active w v)))))}})
+                           (g/check-button-set-active w v)))))}}))
+
+(defn register-widget!
+  "Adds or replaces a widget spec. This is how an optional namespace extends the
+   set of tags without core needing to know about it."
+  [tag spec]
+  (swap! widgets assoc tag spec)
+  tag)
+
+(defn register-signal!
+  "Adds an :on-* prop. `signal` is the GTK signal name; `invoke` is
+   (fn [user-fn widget] ...) and decides what the handler receives."
+  [prop signal invoke]
+  (swap! signals assoc prop {:signal signal :invoke invoke})
+  prop)
 
 ;; ---------------------------------------------------------------------------
 ;; hiccup normalization
@@ -186,12 +222,12 @@
      (let [[tag & more] form]
        (if (fn? tag)
          (normalize (apply tag more) parent)
-         (let [spec (or (widgets tag)
+         (let [spec (or (@widgets tag)
                         (hiccup-error!
                          (str "unknown widget " (pr-str tag)
                               "\n  known widgets: "
-                              (clojure.string/join " " (sort (map str (keys widgets)))))
-                         {:tag tag :known (set (keys widgets))}))
+                              (clojure.string/join " " (sort (map str (keys @widgets)))))
+                         {:tag tag :known (set (keys @widgets))}))
                props (if (map? (first more)) (first more) {})
                kids  (->> (if (map? (first more)) (rest more) more)
                           (mapcat #(if (seq? %) % [%]))
@@ -257,14 +293,14 @@
                 (connect! widget prop holder)
                 (assoc hs prop holder))))
           handlers
-          (filter #(contains? props %) (keys signals))))
+          (filter #(contains? props %) (keys @signals))))
 
 (defn- sync-props!
   "Pushes changed props into the widget. Returns the node, whose :handlers may
    have grown."
   [node props prev-props]
   (let [{:keys [tag widget]} node
-        spec     (widgets tag)
+        spec     (@widgets tag)
         changed  (changed-props props prev-props)
         handlers (ensure-handlers! widget (:handlers node) props)]
     ;; swap the fn inside each holder; the GTK connection itself stays put.
@@ -276,9 +312,9 @@
     (assoc node :handlers handlers)))
 
 (defn- create [{:keys [tag props children] :as vnode}]
-  (let [spec     (widgets tag)
+  (let [spec     (@widgets tag)
         widget   ((:ctor spec) props)
-        handlers (into {} (for [prop (keys signals)
+        handlers (into {} (for [prop (keys @signals)
                                 :when (contains? props prop)]
                             [prop (atom (get props prop))]))
         node     (assoc vnode :widget widget :handlers handlers)]
@@ -289,7 +325,7 @@
     (assoc node :children
            (mapv (fn [child]
                    (let [c (create child)]
-                     ((:append spec) widget (:widget c))
+                     ((:append spec) widget (:widget c) (:props c))
                      c))
                  children))))
 
@@ -301,19 +337,19 @@
     ;; nothing there yet -> build
     (nil? old-node)
     (let [n (create new-vnode)]
-      ((:append parent-spec) parent-widget (:widget n))
+      ((:append parent-spec) parent-widget (:widget n) (:props n))
       n)
 
     ;; different widget kind -> replace
     (not= (:tag old-node) (:tag new-vnode))
-    (do ((:remove parent-spec) parent-widget (:widget old-node))
+    (do ((:remove parent-spec) parent-widget (:widget old-node) (:props old-node))
         (let [n (create new-vnode)]
-          ((:append parent-spec) parent-widget (:widget n))
+          ((:append parent-spec) parent-widget (:widget n) (:props n))
           n))
 
     ;; same kind -> patch in place
     :else
-    (let [spec (widgets (:tag new-vnode))
+    (let [spec (@widgets (:tag new-vnode))
           node (-> (assoc old-node :props (:props new-vnode))
                    (sync-props! (:props new-vnode) (:props old-node)))]
       (let [olds (:children old-node)
@@ -325,16 +361,40 @@
                         (drop (count olds) news))]
         ;; children that disappeared
         (doseq [o (drop (count news) olds)]
-          ((:remove spec) (:widget node) (:widget o)))
+          ((:remove spec) (:widget node) (:widget o) (:props o)))
         (assoc node :children (into kept added))))))
 
 ;; ---------------------------------------------------------------------------
 ;; run
 ;; ---------------------------------------------------------------------------
 
-(def ^:private root-spec
-  {:append (fn [win child] (g/window-set-child win child))
-   :remove (fn [win _child] (g/window-set-child win nil))})
+(def default-window
+  "How to make the top-level window and put content in it. `gtk.adw` supplies
+   an AdwWindow instead, which has no titlebar of its own -- which is what makes
+   an Adw header bar look right."
+  {:ctor        g/window-new
+   :set-content g/window-set-child})
+
+(defn- root-spec [{:keys [set-content]}]
+  {:append (fn [win child _props] (set-content win child))
+   :remove (fn [win _child _props] (set-content win nil))})
+
+(defn- wake!
+  "Interrupts a blocking g_main_context_iteration so the loop can notice a
+   dirty flag set from another thread. Safe from any thread -- it is one of the
+   few GLib calls that is."
+  []
+  (g/main-context-wakeup nil))
+
+(defn load-css!
+  "Installs CSS for the whole display, so :class has something to attach to.
+   Call after the window exists. Later calls stack; a higher priority wins."
+  ([css] (load-css! css 800))
+  ([css priority]
+   (let [p (g/css-provider-new)]
+     (g/css-provider-load-from-string p css)
+     (g/style-context-add-provider-for-display (g/display-get-default) p priority)
+     p)))
 
 (defonce ^{:doc "The running app, for REPL poking: {:window ptr :tree node}.
   Single window, so a single atom is enough for the POC."}
@@ -367,16 +427,21 @@
   "Opens a window, renders `component` (a fn returning hiccup) into it and
    drives the GTK main loop until the window is closed.
 
+   `:on-ready` is called once as (f window root-node), after gtk_init and the
+   first render but before the window is presented.
+
    Blocks. At the REPL, start it on its own thread so the prompt stays free:
 
      (def app-thread (future (ui/run (app) :title \"todo\")))
 
    Every GTK call then happens on that thread, which is what GTK requires.
    `refresh!` and `swap!` from the REPL only set a flag, so they are safe."
-  [component & {:keys [title width height]
-                :or   {title "babashka + gtk4" width 360 height 200}}]
+  [component & {:keys [title width height window on-ready]
+                :or   {title "babashka + gtk4" width 360 height 200
+                       window default-window}}]
   (g/gtk-init)
-  (let [win       (g/window-new)
+  (let [root      (root-spec window)
+        win       ((:ctor window))
         running   (volatile! true)
         destroyed (volatile! false)
         dirty     (volatile! true)
@@ -387,7 +452,7 @@
                     ;; normalize first: it validates the whole tree before
                     ;; reconcile mutates any widget
                     (let [vtree (normalize (component))]
-                      (vreset! tree (reconcile root-spec win @tree vtree))
+                      (vreset! tree (reconcile root win @tree vtree))
                       (reset! last-error nil)
                       (swap! current assoc :tree @tree :error nil))
                     (catch Throwable t
@@ -395,7 +460,12 @@
                       ;; stays alive and the next good render recovers it
                       (report! "render failed" t)
                       (swap! current assoc :error @last-error))))]
-    (reset! current {:window win :tree nil :stop! #(vreset! running false)})
+    (reset! current {:window win :tree nil
+                     ;; the thread running this loop is the GTK thread: every
+                     ;; widget call must happen here. Recorded so helpers can
+                     ;; check, or marshal onto it.
+                     :thread (.getId (Thread/currentThread))
+                     :stop! #(do (vreset! running false) (wake!))})
     (g/window-set-title win title)
     (g/window-set-default-size win width height)
     (let [cb (ffi/callback (ffi/global-arena)
@@ -405,19 +475,27 @@
                            [:pointer :pointer] :void)]
       (g/signal-connect-data win "destroy" cb nil nil 0))
 
-    (r/set-invalidate! #(vreset! dirty true))
+    ;; the loop blocks in g_main_context_iteration, so anything that makes the
+    ;; UI stale has to wake it as well as set the flag
+    (r/set-invalidate! #(do (vreset! dirty true) (wake!)))
     (render!)
+    ;; after gtk_init and the first render, so a caller can install CSS (which
+    ;; needs a display) or keep a pointer to a widget it just built
+    (when on-ready (on-ready win @tree))
     (g/window-present win)
 
     (try
       (while @running
-        ;; drain whatever GTK has queued, bounded so a busy source cannot
-        ;; starve the re-render below
+        ;; Block until GTK has something to do. An idle app costs nothing: no
+        ;; timer, no polling. A state change on any thread calls wake! and the
+        ;; iteration returns immediately.
+        (g/main-iteration nil 1)
+        ;; then drain anything else already queued, bounded so a busy source
+        ;; cannot starve the re-render below
         (loop [i 0]
           (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
             (recur (inc i))))
-        (when @dirty (render!))
-        (Thread/sleep 8))
+        (when @dirty (render!)))
       (finally
         ;; whatever happened, do not leave an unpumped window on screen
         (when-not @destroyed

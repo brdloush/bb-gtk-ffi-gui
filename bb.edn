@@ -7,6 +7,19 @@
   todo    {:doc "Run the todo example (dynamic list, entry, check buttons)."
            :task (exec 'todo/-main)}
 
+  ;; -Xmx has to be on the command line, so these re-exec babashka with it.
+  ;; bb is a GraalVM native image and honours -Xmx: without it the monitor sits
+  ;; around 190 MB resident, with it around 158 MB. The renderer is chosen from
+  ;; inside the app, in monitor/lean!.
+  monitor {:doc "Run the libadwaita system monitor (the pretty one)."
+           :requires ([babashka.process])
+           :task (babashka.process/exec "bb" "-Xmx96m" "-m" "monitor")}
+
+  shot    {:doc "Write docs/monitor.png -- the app screenshots itself."
+           :requires ([babashka.process])
+           :task (apply babashka.process/exec
+                        "bb" "-Xmx96m" "-m" "shot" *command-line-args*)}
+
   dev     {:doc "Start an nREPL server, then connect your editor and see gtk.dev."
            :task (shell "bb" "nrepl-server" "1667")}
 
@@ -17,6 +30,10 @@
                             "test/dev_test.clj"
                             "test/error_recovery_test.clj"
                             "test/text_children_test.clj"
-                            "test/props_test.clj"]]
+                            "test/props_test.clj"
+                            "test/extension_test.clj"
+                            "test/adw_test.clj"
+                            "test/sysinfo_test.clj"
+                            "test/screenshot_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}

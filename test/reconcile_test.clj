@@ -2,7 +2,7 @@
 (require '[babashka.ffi :as ffi] '[gtk.core :as ui] '[gtk.ffi :as g] '[gtk.ratom :as r])
 (g/gtk-init)
 (def win (g/window-new))
-(def root-spec @#'ui/root-spec)
+(def root-spec (@#'ui/root-spec ui/default-window))   ; root-spec takes the :window map now
 (def normalize @#'ui/normalize)
 (def reconcile @#'ui/reconcile)
 

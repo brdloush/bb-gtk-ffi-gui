@@ -10,6 +10,8 @@
 ;; -- lifecycle / main loop ---------------------------------------------------
 (defcfn gtk-init "gtk_init" [] :void)
 (defcfn main-iteration "g_main_context_iteration" [:pointer :int] :int)
+(defcfn idle-add "g_idle_add" [:pointer :pointer] :int)
+(defcfn main-context-wakeup "g_main_context_wakeup" [:pointer] :void)
 
 ;; -- signals ----------------------------------------------------------------
 (defcfn signal-connect-data "g_signal_connect_data"
@@ -60,6 +62,30 @@
 (defcfn check-button-set-label "gtk_check_button_set_label" [:pointer :string] :void)
 (defcfn check-button-get-active "gtk_check_button_get_active" [:pointer] :int)
 (defcfn check-button-set-active "gtk_check_button_set_active" [:pointer :int] :void)
+
+;; -- snapshot to png (gtk.dev/screenshot!) -----------------------------------
+(defcfn widget-paintable-new "gtk_widget_paintable_new" [:pointer] :pointer)
+(defcfn widget-get-width "gtk_widget_get_width" [:pointer] :int)
+(defcfn widget-get-height "gtk_widget_get_height" [:pointer] :int)
+(defcfn snapshot-new "gtk_snapshot_new" [] :pointer)
+(defcfn paintable-snapshot "gdk_paintable_snapshot" [:pointer :pointer :double :double] :void)
+(defcfn snapshot-free-to-node "gtk_snapshot_free_to_node" [:pointer] :pointer)
+(defcfn widget-get-root "gtk_widget_get_root" [:pointer] :pointer)
+(defcfn native-get-renderer "gtk_native_get_renderer" [:pointer] :pointer)
+(defcfn renderer-render-texture "gsk_renderer_render_texture" [:pointer :pointer :pointer] :pointer)
+(defcfn texture-save-to-png "gdk_texture_save_to_png" [:pointer :string] :int)
+
+;; -- css --------------------------------------------------------------------
+(defcfn css-provider-new "gtk_css_provider_new" [] :pointer)
+(defcfn css-provider-load-from-string "gtk_css_provider_load_from_string" [:pointer :string] :void)
+(defcfn display-get-default "gdk_display_get_default" [] :pointer)
+(defcfn style-context-add-provider-for-display "gtk_style_context_add_provider_for_display"
+  [:pointer :pointer :int] :void)
+
+;; -- environment (must be set before GTK reads it, i.e. before the first
+;; -- window is realized) ----------------------------------------------------
+(defcfn setenv "g_setenv" [:string :string :int] :int)
+(defcfn getenv "g_getenv" [:string] :string)
 
 ;; -- helpers ----------------------------------------------------------------
 (def HORIZONTAL 0)

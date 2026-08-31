@@ -10,6 +10,37 @@ new [FFI](https://blog.michielborkent.nl/babashka-ffi.html) instead of Jolt.
 No JVM, no build step, no bindings to generate. `bb counter` and a native
 window appears.
 
+## The pretty one
+
+`bb monitor` -- a libadwaita dashboard reading `/proc`, live. It renders its own
+screenshot, so this picture is produced by `bb shot`:
+
+![System Monitor](docs/monitor.png)
+
+Look at the row it highlights. An idle window built this way costs **0.00% of a
+core**; the monitor measures 1.5% over eight seconds, and all of that is its own
+work -- it re-reads `/proc` and repaints fourteen rows every second. The figure
+in the picture is a live one-second sample, so it jitters between 1 and 3%. Next
+to it is a JetBrains IDE using 4.5 GB.
+
+The UI is one pure function of one map. `examples/monitor.clj` is 167 lines,
+`examples/sysinfo.clj` (all the `/proc` reading) is 215, and the libadwaita
+bindings are 279. Core did not have to change much to allow it -- see
+[Extension points](#extension-points) and `plan/beautiful-app.md`.
+
+### Keeping it small
+
+239 MB down to 162, in two steps:
+
+| | saves | how |
+| --- | --- | --- |
+| `GSK_RENDERER=cairo` | ~47 MB | this UI is flat lists and level bars; nothing needs a GPU, and not mapping the GL/mesa stack is free money. Output is pixel-identical. Set from inside the process in `monitor/lean!`, so it holds however you launch it. |
+| `-Xmx96m` | ~30 MB | bb is a GraalVM native image and **does** honour `-Xmx`. It has to be on the command line, so the `monitor` and `shot` tasks re-exec babashka with it -- via `babashka.process/exec`, so it stays one process. |
+
+`-Xmx64m` works too and saves another 7 MB, but 96 leaves headroom; below about
+48 MB the app dies on startup. The remaining ~160 MB is mostly the babashka
+binary itself (63 MB resident doing nothing) plus GTK and its theme.
+
 ## The counter
 
 ```clojure
@@ -23,8 +54,8 @@ window appears.
       [:vbox {:spacing 12 :margin 16}
        [:label "Count: " @n]
        [:hbox {:spacing 8}
-        [:button {:label "- 1"   :on-click #(swap! n dec)}]
-        [:button {:label "+ 1"   :on-click #(swap! n inc)}]
+        [:button {:label "- 1" :on-click #(swap! n dec)}]
+        [:button {:label "+ 1" :on-click #(swap! n inc)}]
         [:button {:label "reset" :on-click #(reset! n 0)
                   :sensitive (not= 0 @n)}]]])))
 
@@ -35,15 +66,21 @@ window appears.
 ## Run it
 
 ```bash
+bb monitor    # the libadwaita system monitor
 bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
-bb test       # all seven test files (see Tests below)
+
+bb shot       # regenerate docs/monitor.png (the app shoots itself)
+bb test       # all eleven test files (see Tests below)
 bb dev        # nREPL server on 1667, for editor-driven work
 
 bb tasks      # list them
 ```
 
-Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`).
+Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`). `bb monitor` also needs
+libadwaita (`libadwaita-1.so.0`, 1.9 here) and reads `/proc`, so it is
+Linux-only; it re-execs babashka with `-Xmx96m`, for the reason in
+[Keeping it small](#keeping-it-small).
 
 ## REPL workflow
 
@@ -114,15 +151,33 @@ That `refresh!` is the step the [dev helpers](#dev-helpers) remove. One
 (ui/close!)                           ; shut the window, let the loop return
 ```
 
-`ui/close!` is the clean way out. `future-cancel` kills the loop but leaves the
-window on screen. Closing the window with the mouse also ends the loop.
+`ui/close!` is the clean way out: it asks the loop to stop, and the window is
+destroyed by the loop itself on the thread GTK expects. `future-cancel` also
+tears the window down now -- it interrupts the loop, and `run`'s `finally` still
+runs -- but it stops at an arbitrary point, so prefer `close!`. Closing the
+window with the mouse ends the loop too.
 
 ### Threads
 
 Every GTK call happens on the thread that ran `gtk_init` -- the future's thread
--- which is what GTK requires. `refresh!`, `close!` and `swap!` are safe to call
-from the REPL thread because they only flip a flag; the render and the teardown
-both happen back on the GTK thread.
+-- which is what GTK requires, and `(:thread @ui/current)` records which one it
+is.
+
+`refresh!`, `close!` and `swap!` are safe from any thread: they set a flag and
+call `g_main_context_wakeup`, both of which are safe off-thread. The render and
+the teardown happen back on the GTK thread.
+
+Anything else that touches widgets must get over there itself. `dev/later!`
+does that via `g_idle_add`, and `dev/on-gtk-thread!` waits for the result:
+
+```clojure
+(future
+  (let [rows (slow-query)]                    ; off-thread is fine
+    (dev/later! #(reset! state rows))))       ; widgets only over there
+```
+
+Calling a widget function from the wrong thread does not raise -- it segfaults.
+`dev/screenshot!` marshals itself for exactly this reason.
 
 ### Gotchas
 
@@ -154,7 +209,7 @@ them. Nothing here is needed at runtime.
 | `(dev/auto-refresh!)` | everything | keep views pure | ~0.3% of a core |
 | `(dev/watch-ns! 'todo)` | fns already interned when it ran | re-run it after adding a fn | none |
 | `(dev/defview home [st] ...)` | that one var | use `defview` instead of `defn` | none |
-| `(dev/watch-files! "src" "examples")` | anything saved to disk | `defonce` for state | a `stat` every 300ms |
+| `(dev/watch-files! "src" "examples")` | anything saved to disk | `defonce` for state | one stat per file, every 300ms |
 
 ```clojure
 (require '[gtk.dev :as dev])
@@ -191,7 +246,7 @@ re-run it, or declare views with `defview`, which arms itself:
 
 ```clojure
 (dev/defview home [state]
-  [:vbox {} [:label {:label (str "items: " (count (:items @state)))}]])
+  [:vbox {} [:label "items: " (count (:items @state))]])
 ```
 
 The ordering works out: a redef fires the watch armed by the previous definition,
@@ -248,14 +303,15 @@ child, an unknown widget, recovery, and a throwing handler.
 
 ## How it works
 
-Three small namespaces, plus one for dev comfort:
+Three small namespaces, plus two optional ones:
 
-| File | Job |
-| --- | --- |
-| `src/gtk/ffi.clj` | `defcfn` bindings for the ~30 GTK4/GObject symbols the POC uses |
-| `src/gtk/ratom.clj` | reactive atom: a normal atom whose watch marks the UI dirty |
-| `src/gtk/core.clj` | hiccup -> widgets, plus a reconciler and the main loop |
-| `src/gtk/dev.clj` | dev-only: var watches, auto-refresh, file watching |
+| File | Lines | Job |
+| --- | --- | --- |
+| `src/gtk/ffi.clj` | 90 | `defcfn` bindings for the 52 GTK4/GObject symbols core uses |
+| `src/gtk/ratom.clj` | 25 | reactive atom: a normal atom whose watch marks the UI dirty |
+| `src/gtk/core.clj` | 506 | hiccup -> widgets, plus a reconciler and the main loop |
+| `src/gtk/dev.clj` | 295 | dev-only: var watches, auto-refresh, file watching, screenshots |
+| `src/gtk/adw.clj` | 279 | optional: 58 libadwaita bindings, 14 tags. Core does not know it exists |
 
 ### Rendering
 
@@ -266,7 +322,7 @@ When a reactive atom changes, the tree is marked dirty. On the next main-loop
 turn the render fn runs again and the new hiccup is **diffed against the
 previous tree**: only properties that actually changed are pushed into GTK, and
 a widget is rebuilt only if its tag changed. `test/reconcile_test.clj` asserts
-exactly this — the label pointer stays identical across a state change.
+exactly this -- the label pointer stays identical across a state change.
 
 glimmer-ui avoids diffing altogether by having each widget subscribe to a path
 in the state. Diffing was simply the shorter route to a working POC; the
@@ -298,10 +354,14 @@ handler out of a holder atom. Re-renders just `reset!` the holder:
 
 ```clojure
 (defn- connect! [widget prop holder]
-  (let [{:keys [signal invoke]} (signals prop)
+  (let [{:keys [signal invoke]} (@signals prop)
         cb (ffi/callback (ffi/global-arena)
                          (fn [_instance _data]
-                           (when-let [f @holder] (invoke f widget)))
+                           ;; never let an exception cross back into C
+                           (try
+                             (when-let [f @holder] (invoke f widget))
+                             (catch Throwable t
+                               (report! (str prop " handler failed") t))))
                          [:pointer :pointer] :void)]
     (g/signal-connect-data widget signal cb nil nil 0)))
 ```
@@ -324,15 +384,76 @@ Babashka has no GTK main loop to hand over to, so `run` drives it:
 
 ```clojure
 (while @running
-  (loop [i 0]                                    ; drain queued GTK events
+  (g/main-iteration nil 1)                       ; block until GTK has work
+  (loop [i 0]                                    ; then drain what else queued
     (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
       (recur (inc i))))
-  (when @dirty (render!))
-  (Thread/sleep 8))
+  (when @dirty (render!)))
 ```
 
-`g_main_context_iteration` is called non-blocking so the dirty check gets a turn.
-The drain is bounded so a busy source cannot starve rendering.
+The interesting part is the blocking call. Because the loop has to check a dirty
+flag that other threads set, the obvious design is to poll -- and it did, every
+8ms, which cost **2.8% of a core doing nothing**. Now it blocks, and everything
+that dirties the UI also calls `g_main_context_wakeup`:
+
+```clojure
+(r/set-invalidate! #(do (vreset! dirty true) (wake!)))
+```
+
+An idle window now measures **0.00%**. `close!` wakes the loop the same way, or
+it would sit blocked forever waiting for an event that is not coming.
+
+The second drain is bounded so a busy source cannot starve rendering.
+
+## Extension points
+
+Core knows nothing about libadwaita. Six small hooks are what let an optional
+namespace add 14 widget tags, a window type and a stylesheet from outside.
+
+| | what it is for |
+| --- | --- |
+| `widgets` / `signals` are atoms | `register-widget!` and `register-signal!` add tags and events from another namespace |
+| `:append` / `:remove` get the child's props | lets a container read a `:slot` prop and put the child somewhere specific |
+| `run`'s `:window` option | `{:ctor f :set-content f}`. `AdwWindow` has no titlebar of its own, which is what makes an Adw header bar sit flush |
+| `run`'s `:on-ready` | `(f window root-node)`, once, after `gtk_init` and the first render. For installing CSS (needs a display) or keeping a pointer to a widget you just built |
+| `load-css!` | installs a `GtkCssProvider` for the display, so `:class` attaches to something |
+| `wake!` in the main loop | not an API, but what makes a blocking loop possible |
+
+`test/extension_test.clj` covers all of them.
+
+## libadwaita
+
+`(require '[gtk.adw :as adw])` calls `adw_init` and registers these tags. Pass
+`:window adw/window` to `ui/run`.
+
+| tag | own props | slots for children |
+| --- | --- | --- |
+| `:toolbar-view` | -- | `:top`, `:bottom`, else content |
+| `:header-bar` | -- | `:start`, `:end`, else the title widget |
+| `:window-title` | `:title` `:subtitle` | -- |
+| `:page` | -- | groups |
+| `:group` | `:title` `:description` | rows |
+| `:row` | `:title` `:subtitle` | `:prefix`, else `:suffix` |
+| `:status-page` | `:title` `:description` `:icon` | -- |
+| `:toast-overlay` | -- | one child |
+| `:bin` `:scroll` | -- | one child |
+| `:level` | `:value` `:min` `:max` `:width` | -- |
+| `:icon` | `:icon` `:size` | -- |
+| `:icon-button` | `:icon` | -- |
+| `:adw-window` | -- | one child |
+
+A slot is a plain `:slot` prop on the **child**, which the parent's `:append`
+reads:
+
+```clojure
+[:row {:title "firefox" :subtitle "412 MB"}
+ [:icon  {:slot :prefix :icon "application-x-executable-symbolic"}]
+ [:level {:slot :suffix :value 0.42}]]
+```
+
+`(adw/toast! overlay "message")` posts a toast. libadwaita's own style classes
+work through `:class` with no CSS of your own -- `"flat"`, `"dim-label"`,
+`"title-1"`, `"pill"`, `"card"`, `"success"`.
 
 ## Widgets
 
@@ -381,14 +502,21 @@ Four things are refused, each saying what to do instead: text on a container
 child that is neither a vector, string, number, seq nor nil.
 `test/text_children_test.clj` covers all of it.
 
-Adding a widget is one entry in `gtk.core/widgets`:
+Adding a widget is one entry in `gtk.core/widgets`. `:text-prop` is what makes
+text children work, so do not leave it out:
 
 ```clojure
-:label {:ctor  (fn [p] (g/label-new (str (:label p ""))))
-        :apply (fn [w p changed]
-                 (when (contains? changed :label)
-                   (g/label-set-text w (str (:label p "")))))}
+(ui/register-widget! :label
+  {:text-prop :label                                   ; [:label "hi"] fills this
+   :ctor  (fn [p] (g/label-new (str (:label p ""))))
+   :apply (fn [w p changed]
+            (when (contains? changed :label)
+              (g/label-set-text w (str (:label p "")))))})
 ```
+
+A container adds `:append` and `:remove`, each `(fn [parent child-ptr
+child-props])`. The child's props are passed so a container can honour a
+`:slot` -- see [gtk.adw](#libadwaita).
 
 ## API
 
@@ -396,13 +524,16 @@ Adding a widget is one entry in `gtk.core/widgets`:
 
 | | |
 | --- | --- |
-| `(run component & opts)` | Opens a window and drives the main loop. Blocks. Opts: `:title` (`"babashka + gtk4"`), `:width` (360), `:height` (200). `component` is a fn of no args returning hiccup. |
+| `(run component & opts)` | Opens a window and drives the main loop. Blocks. Opts: `:title` (`"babashka + gtk4"`), `:width` (360), `:height` (200), `:window` (`default-window`), `:on-ready` (`(f window root-node)`, once). `component` is a fn of no args returning hiccup. |
 | `(refresh!)` | Re-render on the next loop turn. For code changes; state changes do it themselves. |
 | `(close!)` | Close the window and let `run` return. Safe from any thread. |
-| `current` | Atom: `{:window ptr :tree node :error e}` while a window is up, else nil. |
+| `current` | Atom, while a window is up: `{:window ptr :tree node :thread id :stop! f :error e}`. nil otherwise. |
 | `last-error` | Atom: the last render or handler failure, `nil` after a good render. |
-| `widgets` | The widget table. Add a tag by adding an entry. |
-| `signals` | The `:on-*` prop to GTK signal table. |
+| `(load-css! css)` / `(load-css! css priority)` | Installs a `GtkCssProvider` for the display, so `:class` means something. Needs a display, so call it from `:on-ready`. |
+| `(register-widget! tag spec)` | Adds or replaces a widget tag. |
+| `(register-signal! prop signal invoke)` | Adds an `:on-*` prop. `invoke` is `(fn [user-fn widget])` and decides what the handler receives. |
+| `widgets` `signals` | The tables themselves, as atoms. |
+| `default-window` | `{:ctor :set-content}` for a plain `GtkWindow`. |
 
 ### gtk.ratom
 
@@ -426,11 +557,26 @@ Adding a widget is one entry in `gtk.core/widgets`:
 | `(stop-watching-files!)` | Stop it. |
 | `(status)` | What is running, and whether a window is up. |
 | `(stop!)` | Stop every dev helper. Leaves the window up. |
+| `(later! f)` | Runs f on the GTK thread, soon. Safe from any thread -- this is how a worker touches widgets at all. |
+| `(on-gtk-thread! f)` / `(on-gtk-thread! f ms)` | Same, but waits for the value and rethrows. Runs inline if already there, so it cannot deadlock. |
+| `(on-gtk-thread?)` | Whether the caller is on the loop's thread. |
+| `(screenshot! path)` / `(screenshot! path widget)` | Renders a widget to PNG through GSK, marshalling itself onto the GTK thread. No compositor needed. |
+
+### gtk.adw
+
+| | |
+| --- | --- |
+| `window` | Pass as `(ui/run view :window adw/window)`. |
+| `(toast! overlay msg)` / `(toast! overlay msg seconds)` | Posts a toast into a `:toast-overlay`. |
+| `specs` | The tag -> spec map, registered on load. |
+| `initialized` | `{:version "1.9" :widgets [...]}`. Requiring the namespace runs `adw_init`. |
 
 ## Tests
 
-`bb test` runs all of them. Each one drives real GTK and reads results back out
-of real widgets, not out of the reconciler's own tree.
+`bb test` runs all of them, against real GTK. Most read their results back out
+of real widgets with GTK getters rather than trusting the reconciler's own tree;
+`reconcile_test` and most of `text_children_test` are the exceptions, since they
+are checking pointer identity and hiccup normalization respectively.
 
 | file | what it pins down |
 | --- | --- |
@@ -441,11 +587,16 @@ of real widgets, not out of the reconciler's own tree.
 | `error_recovery_test.clj` | a bad view and a throwing handler leave the loop alive, and it recovers |
 | `repl_reload_test.clj` | redefine a view, `refresh!`, see it on screen |
 | `dev_test.clj` | all four `gtk.dev` mechanisms against a live window |
+| `extension_test.clj` | the six extension points: registration, child props on `:append`, a pluggable window, `load-css!`, `:on-ready` firing exactly once |
+| `adw_test.clj` | every Adw spec builds the GObject type it claims; each slot lands under the right parent; props reach real Adw setters and stay reactive |
+| `sysinfo_test.clj` | the `/proc` readings, formatting, and a machine with no swap |
+| `screenshot_test.clj` | a PNG really is written; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
 
 ## Not done
 
 POC scope. Missing: keyed children (list reordering re-labels in place instead
-of moving widgets), moving a widget whose tag changed back to its old position
+of moving widgets -- which is why the monitor has no search or sort, and why its
+rows are ranks rather than identities), moving a widget whose tag changed back to its old position
 (it lands at the end of its parent), more widgets, multiple windows,
 `GtkApplication` integration, and path-based subscriptions instead of whole-tree
 diffing.
@@ -458,6 +609,10 @@ table above is the only thing telling you which events are real.
 No error is shown *in* the window -- it goes to stderr, so with no terminal in
 view a broken render looks like nothing happened.
 
-`gtk.dev` is dev-only and unpolished too: one window at a time, `watch-files!`
-polls rather than using inotify, and there is no `require`-graph awareness, so
-reloading a file does not reload the files that depend on it.
+`gtk.dev` is dev-only and unpolished too: `watch-files!` polls rather than using
+inotify, and there is no `require`-graph awareness, so reloading a file does not
+reload the files that depend on it.
+
+Window size is a suggestion. Under a tiling window manager (PaperWM here)
+`:height` is simply ignored -- `gtk_window_get_default_size` reports the tiled
+value back. Nothing to fix on our side.

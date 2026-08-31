@@ -5,7 +5,7 @@
 (def win (g/window-new))
 (def normalize @#'ui/normalize)
 (def reconcile @#'ui/reconcile)
-(def root-spec @#'ui/root-spec)
+(def root-spec (@#'ui/root-spec ui/default-window))   ; root-spec takes the :window map now
 
 (defn props-of [form] (-> (normalize form) :props))
 (defn fails [form]

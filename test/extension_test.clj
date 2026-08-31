@@ -1,0 +1,96 @@
+;; The four extension points that let an optional namespace add libadwaita
+;; without core knowing it exists.
+(require '[babashka.ffi :as ffi :refer [defcfn]]
+         '[gtk.core :as ui] '[gtk.ffi :as g])
+(defcfn has-css-class? "gtk_widget_has_css_class" [:pointer :string] :int)
+(defcfn label-get-text "gtk_label_get_text" [:pointer] :string)
+
+(g/gtk-init)
+(def normalize @#'ui/normalize)
+(def reconcile @#'ui/reconcile)
+(def root-spec (@#'ui/root-spec ui/default-window))
+
+;; --- 1. register-widget! / register-signal! ------------------------------
+(def slots (atom []))
+(defcfn frame-new "gtk_frame_new" [:string] :pointer)
+(defcfn frame-set-child "gtk_frame_set_child" [:pointer :pointer] :void)
+
+(ui/register-widget! :frame
+  {:text-prop :title
+   :ctor  (fn [p] (frame-new (str (:title p ""))))
+   :apply (fn [_w _p _changed] nil)
+   ;; a container that records which slot each child asked for
+   :append (fn [parent child props]
+             (swap! slots conj (:slot props :default))
+             (frame-set-child parent child))
+   :remove (fn [parent _child props]
+             (swap! slots conj [:removed (:slot props :default)])
+             (frame-set-child parent nil))})
+
+(println "1) registered:" (contains? @ui/widgets :frame))
+(assert (contains? @ui/widgets :frame))
+
+;; --- 2. :append and :remove receive the child's props -------------------
+(def win (g/window-new))
+(def t1 (reconcile root-spec win nil
+                   (normalize [:frame {:title "outer"} [:label {:slot :body} "hi"]])))
+(println "2) slot seen by the container:" @slots)
+(assert (= [:body] @slots) "child props did not reach :append")
+
+;; replacing the child by changing its tag passes the OLD props to :remove
+(def t2 (reconcile root-spec win t1
+                   (normalize [:frame {:title "outer"} [:button {:slot :other} "b"]])))
+(println "   after a tag change:" @slots)
+(assert (= [:body [:removed :body] :other] @slots) "wrong props on :remove")
+
+;; boxes ignore the extra argument
+(reset! slots [])
+(def t3 (reconcile root-spec win nil
+                   (normalize [:vbox {} [:label "a"] [:label "b"]])))
+(println "3) a box still works with the 3-arg append:" (count (:children t3)))
+(assert (= 2 (count (:children t3))))
+
+;; --- 3. run's :window option is pluggable -------------------------------
+(def made (atom nil))
+(def custom {:ctor        (fn [] (reset! made :called) (g/window-new))
+             :set-content g/window-set-child})
+(println "4) default-window keys:" (sort (keys ui/default-window)))
+(assert (= [:ctor :set-content] (sort (keys ui/default-window))))
+(def w2 ((:ctor custom)))
+(assert (= :called @made) "the :window ctor was not used")
+((:set-content custom) w2 (g/label-new "in a custom window"))
+(println "   custom window ctor + set-content both work")
+
+;; --- 4. load-css! makes :class mean something --------------------------
+(ui/load-css! ".probe { color: rgb(255,0,0); }")
+(def t4 (reconcile root-spec win nil
+                   (normalize [:vbox {} [:label {:class "probe"} "styled"]])))
+(def lbl (-> t4 :children first :widget))
+(println "5) css loaded, class attached:" (has-css-class? lbl "probe"))
+(assert (= 1 (has-css-class? lbl "probe")))
+(assert (= "styled" (label-get-text lbl)))
+;; --- 5. run's :on-ready fires once, after the first render --------------
+(def ready (atom []))
+(def th (future (ui/run (fn [] [:vbox {} [:label "ready test"]])
+                        :title "on-ready"
+                        :on-ready (fn [w tree] (swap! ready conj [(some? w) (:tag tree)])))))
+(Thread/sleep 700)
+(println "6) :on-ready got the window and the root node:" @ready)
+(assert (= [[true :vbox]] @ready) ":on-ready did not fire exactly once with both args")
+;; it must not fire again on later renders
+(ui/refresh!)
+(Thread/sleep 300)
+(assert (= 1 (count @ready)) ":on-ready fired more than once")
+(println "   still once after a refresh:" (count @ready))
+(ui/close!)
+(assert (nil? (deref th 3000 :TIMEOUT)))
+;; --- 7. g_setenv, which is how the monitor picks its renderer -----------
+;; GSK reads GSK_RENDERER when the first window is realized, so an app can
+;; choose it from inside rather than needing a wrapper script.
+(g/setenv "GTK_FFI_PROBE" "yes" 1)
+(println "7) g_setenv round-trips:" (pr-str (g/getenv "GTK_FFI_PROBE")))
+(assert (= "yes" (g/getenv "GTK_FFI_PROBE")))
+(assert (nil? (g/getenv "GTK_FFI_PROBE_UNSET")))
+
+(println "ALL OK")
+(System/exit 0)

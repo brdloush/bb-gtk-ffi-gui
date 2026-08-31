@@ -13,9 +13,15 @@
 
      (dev/watch-files! \"src\" \"examples\")   ; save in your editor, window updates
 
+   And, for documentation, the app can shoot its own picture:
+
+     (dev/screenshot! \"docs/app.png\")
+
    (dev/status) shows what is active. (dev/stop!) shuts it all down."
-  (:require [babashka.fs :as fs]
-            [gtk.core :as ui]))
+  (:require [babashka.ffi :as ffi]
+            [babashka.fs :as fs]
+            [gtk.core :as ui]
+            [gtk.ffi :as g]))
 
 ;; ---------------------------------------------------------------------------
 ;; var watching
@@ -166,6 +172,107 @@
 (defn stop-watching-files! []
   (swap! files (fn [old] (when old (vreset! (:running? old) false)) nil))
   nil)
+
+;; ---------------------------------------------------------------------------
+;; getting onto the GTK thread
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private gtk-queue (atom []))
+
+(defn- take-all!
+  "Empties the queue atomically and returns what was in it."
+  []
+  (loop []
+    (let [q @gtk-queue]
+      (if (empty? q)
+        []
+        (if (compare-and-set! gtk-queue q [])
+          q
+          (recur))))))
+
+(defonce ^:private drain-cb
+  ;; one callback, reused for every later! call, so nothing accumulates in the
+  ;; global arena. Returns 0 = G_SOURCE_REMOVE, so each schedule runs once.
+  (delay
+    (ffi/callback (ffi/global-arena)
+                  (fn [_data]
+                    (doseq [f (take-all!)]
+                      (try (f)
+                           (catch Throwable t
+                             (println "[gtk] later! failed:" (ex-message t)))))
+                    0)
+                  [:pointer] :int)))
+
+(defn on-gtk-thread?
+  "True when the calling thread is the one running the main loop -- the only
+   thread allowed to touch widgets."
+  []
+  (= (:thread @ui/current) (.getId (Thread/currentThread))))
+
+(defn later!
+  "Runs f on the GTK main-loop thread, soon. Safe to call from any thread.
+
+   This is the piece that lets a worker thread touch GTK at all: do the slow
+   work wherever you like, then hand the widget calls back here."
+  [f]
+  (swap! gtk-queue conj f)
+  (g/idle-add @drain-cb nil)
+  nil)
+
+(defn on-gtk-thread!
+  "Runs f on the GTK thread and returns its value, waiting up to ms.
+   Runs inline when already there, so it cannot deadlock against itself."
+  ([f] (on-gtk-thread! f 5000))
+  ([f ms]
+   (if (on-gtk-thread?)
+     (f)
+     (let [p (promise)]
+       (later! #(deliver p (try {:ok (f)} (catch Throwable t {:err t}))))
+       (let [r (deref p ms ::timeout)]
+         (cond
+           (= ::timeout r) (throw (ex-info "timed out waiting for the GTK thread"
+                                           {:ms ms}))
+           (:err r)        (throw (:err r))
+           :else           (:ok r)))))))
+
+;; ---------------------------------------------------------------------------
+;; screenshots
+;; ---------------------------------------------------------------------------
+
+(defn- shoot!
+  "The actual GSK render. Must run on the GTK thread; screenshot! ensures that."
+  [path widget]
+  (let [w (g/widget-get-width widget)
+        h (g/widget-get-height widget)]
+    (when (or (zero? w) (zero? h))
+      (throw (ex-info "widget has no size yet -- is it realized?"
+                      {:width w :height h})))
+    (let [paintable (g/widget-paintable-new widget)
+          snapshot  (g/snapshot-new)]
+      (g/paintable-snapshot paintable snapshot (double w) (double h))
+      (let [node     (g/snapshot-free-to-node snapshot)
+            ;; the renderer belongs to the toplevel, not to the widget, so ask
+            ;; for the root -- this is what lets a single widget be shot too
+            renderer (g/native-get-renderer (g/widget-get-root widget))
+            texture  (g/renderer-render-texture renderer node nil)]
+        (when-not (g/<-gbool (g/texture-save-to-png texture path))
+          (throw (ex-info "gdk_texture_save_to_png failed" {:path path})))
+        path))))
+
+(defn screenshot!
+  "Renders a widget to a PNG. The app draws itself through GSK, so this needs
+   no compositor cooperation -- which matters, because GNOME refuses D-Bus
+   screenshots from unsandboxed callers.
+
+   With no widget, shoots the running window. Widget calls must happen on the
+   GTK thread, so a call from anywhere else is marshalled there and waited on --
+   calling this from a worker or the REPL is fine. The window must be realized,
+   so give it a moment after `run` starts. Returns the path."
+  ([path] (screenshot! path (:window @ui/current)))
+  ([path widget]
+   (when-not widget
+     (throw (ex-info "nothing to screenshot: no window" {:path path})))
+   (on-gtk-thread! #(shoot! path widget))))
 
 ;; ---------------------------------------------------------------------------
 ;; status / teardown
