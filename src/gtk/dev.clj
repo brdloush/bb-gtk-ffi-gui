@@ -241,7 +241,7 @@
 
 (defn- shoot!
   "The actual GSK render. Must run on the GTK thread; screenshot! ensures that."
-  [path widget]
+  [path widget scale]
   (let [w (g/widget-get-width widget)
         h (g/widget-get-height widget)]
     (when (or (zero? w) (zero? h))
@@ -249,6 +249,12 @@
                       {:width w :height h})))
     (let [paintable (g/widget-paintable-new widget)
           snapshot  (g/snapshot-new)]
+      ;; Widget sizes are in logical pixels. On a HiDPI screen GTK paints at
+      ;; scale x that, so snapshotting at the logical size gives a file at half
+      ;; resolution which then looks soft wherever it is viewed. Scaling the
+      ;; snapshot first makes the node -- and so the texture -- device sized.
+      (when (not= 1 scale)
+        (g/snapshot-scale snapshot (float scale) (float scale)))
       (g/paintable-snapshot paintable snapshot (double w) (double h))
       (let [node     (g/snapshot-free-to-node snapshot)
             ;; the renderer belongs to the toplevel, not to the widget, so ask
@@ -257,7 +263,10 @@
             texture  (g/renderer-render-texture renderer node nil)]
         (when-not (g/<-gbool (g/texture-save-to-png texture path))
           (throw (ex-info "gdk_texture_save_to_png failed" {:path path})))
-        path))))
+        {:path path
+         :scale scale
+         :width (g/texture-get-width texture)
+         :height (g/texture-get-height texture)}))))
 
 (defn screenshot!
   "Renders a widget to a PNG. The app draws itself through GSK, so this needs
@@ -267,12 +276,20 @@
    With no widget, shoots the running window. Widget calls must happen on the
    GTK thread, so a call from anywhere else is marshalled there and waited on --
    calling this from a worker or the REPL is fine. The window must be realized,
-   so give it a moment after `run` starts. Returns the path."
+   so give it a moment after `run` starts.
+
+   Renders at the widget's scale factor by default, so a 2x screen gives a file
+   with twice the pixels rather than a soft, upscaled one. Pass `scale` to
+   override -- 1 for a logical-size file.
+
+   Returns {:path :scale :width :height}, the size being real pixels."
   ([path] (screenshot! path (:window @ui/current)))
-  ([path widget]
+  ([path widget] (screenshot! path widget nil))
+  ([path widget scale]
    (when-not widget
      (throw (ex-info "nothing to screenshot: no window" {:path path})))
-   (on-gtk-thread! #(shoot! path widget))))
+   (on-gtk-thread!
+    #(shoot! path widget (or scale (g/widget-get-scale-factor widget))))))
 
 ;; ---------------------------------------------------------------------------
 ;; status / teardown

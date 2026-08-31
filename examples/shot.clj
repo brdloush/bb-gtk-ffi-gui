@@ -36,6 +36,8 @@
                   (Thread/sleep 7000)
                   (dev/later!
                    (fn []
-                     (println "wrote" (dev/screenshot! path))
+                     (let [{:keys [width height scale]} (dev/screenshot! path)]
+                       (println (format "wrote %s  %dx%d px (scale %d)"
+                                        path width height scale)))
                      (ui/close!))))))
       (finally (stop)))))

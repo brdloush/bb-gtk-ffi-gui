@@ -106,6 +106,12 @@ No compositor cooperation at all. It lives in `gtk.dev/screenshot!`, and
 `dev/later!` (`g_idle_add`) hops a waiting worker back onto the GTK thread,
 because widget calls from the wrong thread segfault.
 
+One thing missed the first time: widget sizes are **logical** pixels. On a 2x
+display GTK paints at twice that, so snapshotting at the widget's reported size
+wrote a half-resolution file that looked soft. `gtk_snapshot_scale` by the
+widget's scale factor before snapshotting makes the texture device-sized --
+1520x2080 instead of 760x1040 here.
+
 ### Phase 4 -- live data -- DONE
 
 `/proc` only, no network, no dependencies:

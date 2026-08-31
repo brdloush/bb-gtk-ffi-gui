@@ -13,7 +13,8 @@ window appears.
 ## The pretty one
 
 `bb monitor` -- a libadwaita dashboard reading `/proc`, live. It renders its own
-screenshot, so this picture is produced by `bb shot`:
+screenshot, so this picture is produced by `bb shot`, at the display's full
+pixel density:
 
 ![System Monitor](docs/monitor.png)
 
@@ -560,7 +561,7 @@ child-props])`. The child's props are passed so a container can honour a
 | `(later! f)` | Runs f on the GTK thread, soon. Safe from any thread -- this is how a worker touches widgets at all. |
 | `(on-gtk-thread! f)` / `(on-gtk-thread! f ms)` | Same, but waits for the value and rethrows. Runs inline if already there, so it cannot deadlock. |
 | `(on-gtk-thread?)` | Whether the caller is on the loop's thread. |
-| `(screenshot! path)` / `(screenshot! path widget)` | Renders a widget to PNG through GSK, marshalling itself onto the GTK thread. No compositor needed. |
+| `(screenshot! path)` / `(screenshot! path widget)` / `(screenshot! path widget scale)` | Renders a widget to PNG through GSK, marshalling itself onto the GTK thread. No compositor needed. Renders at the display's scale factor by default, so a 2x screen gives twice the pixels instead of a soft upscale. Returns `{:path :scale :width :height}`. |
 
 ### gtk.adw
 
@@ -590,7 +591,7 @@ are checking pointer identity and hiccup normalization respectively.
 | `extension_test.clj` | the six extension points: registration, child props on `:append`, a pluggable window, `load-css!`, `:on-ready` firing exactly once |
 | `adw_test.clj` | every Adw spec builds the GObject type it claims; each slot lands under the right parent; props reach real Adw setters and stay reactive |
 | `sysinfo_test.clj` | the `/proc` readings, formatting, and a machine with no swap |
-| `screenshot_test.clj` | a PNG really is written; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
+| `screenshot_test.clj` | a PNG really is written, at the display's scale rather than the logical size; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
 
 ## Not done
 
