@@ -11,13 +11,29 @@
    runs again, the new hiccup is diffed against the previous tree, and only the
    properties that actually changed are pushed into GTK. No widget is rebuilt
    unless its tag changed."
-  (:require [gtk.ffi :as g]
-            [gtk.ratom :as r]
-            [babashka.ffi :as ffi]))
+  (:require [babashka.ffi :as ffi]
+            [clojure.string]
+            [gtk.ffi :as g]
+            [gtk.ratom :as r]))
 
 ;; ---------------------------------------------------------------------------
 ;; signals
 ;; ---------------------------------------------------------------------------
+
+(def ^{:doc "Last thing that blew up, so a REPL can look at it."} last-error
+  (atom nil))
+
+(defn- report!
+  "Prints what went wrong without killing the caller. Deduplicated, because
+   with dev/auto-refresh! a broken view would otherwise print 10x a second."
+  [what ^Throwable t]
+  (let [msg (or (ex-message t) (str t))]
+    (when (not= msg (:message @last-error))
+      (reset! last-error {:what what :message msg :data (ex-data t)})
+      (binding [*out* *err*]
+        (println (str "\n[gtk] " what ": " msg))
+        (when-let [d (ex-data t)] (println "      " (pr-str d)))))
+    nil))
 
 (def signals
   "hiccup prop -> GTK signal + how to call the user's handler."
@@ -38,8 +54,12 @@
   (let [{:keys [signal invoke]} (signals prop)
         cb (ffi/callback (ffi/global-arena)
                          (fn [_instance _data]
-                           (when-let [f @holder]
-                             (invoke f widget)))
+                           ;; never let an exception cross back into C
+                           (try
+                             (when-let [f @holder]
+                               (invoke f widget))
+                             (catch Throwable t
+                               (report! (str prop " handler failed") t))))
                          [:pointer :pointer] :void)]
     (g/signal-connect-data widget signal cb nil nil 0)))
 
@@ -119,27 +139,44 @@
 ;; hiccup normalization
 ;; ---------------------------------------------------------------------------
 
+(defn- bad-hiccup! [form parent]
+  (throw (ex-info (str "invalid hiccup "
+                       (if parent (str "inside " parent) "at the root of a view")
+                       ": " (pr-str form)
+                       "\n  expected a vector like [:label {:label \"hi\"}], a seq of those, or nil"
+                       (when (string? form)
+                         (str "\n  a bare string is not a child -- write [:label {:label "
+                              (pr-str form) "}]")))
+                  {:form form :parent parent})))
+
 (defn- normalize
   "Expands function components and flattens seqs. Returns
-   {:tag kw :props map :children [normalized...]} or nil."
-  [form]
-  (cond
-    (nil? form) nil
-    (not (vector? form)) (throw (ex-info "not hiccup" {:form form}))
-    :else
-    (let [[tag & more] form]
-      (if (fn? tag)
-        (normalize (apply tag more))
-        (let [props (if (map? (first more)) (first more) {})
-              kids  (if (map? (first more)) (rest more) more)]
-          (when-not (widgets tag)
-            (throw (ex-info (str "unknown widget " tag) {:tag tag})))
-          {:tag tag
-           :props props
-           :children (->> kids
-                          (mapcat #(if (seq? %) % [%]))
-                          (remove nil?)
-                          (mapv normalize))})))))
+   {:tag kw :props map :children [normalized...]} or nil.
+
+   Runs over the whole tree before `reconcile` touches a single widget, so a
+   malformed view is rejected without half-mutating the window."
+  ([form] (normalize form nil))
+  ([form parent]
+   (cond
+     (nil? form) nil
+     (not (vector? form)) (bad-hiccup! form parent)
+     :else
+     (let [[tag & more] form]
+       (if (fn? tag)
+         (normalize (apply tag more) parent)
+         (let [props (if (map? (first more)) (first more) {})
+               kids  (if (map? (first more)) (rest more) more)]
+           (when-not (widgets tag)
+             (throw (ex-info (str "unknown widget " (pr-str tag)
+                                  "\n  known widgets: "
+                                  (clojure.string/join " " (sort (map str (keys widgets)))))
+                             {:tag tag :known (set (keys widgets))})))
+           {:tag tag
+            :props props
+            :children (->> kids
+                           (mapcat #(if (seq? %) % [%]))
+                           (remove nil?)
+                           (mapv #(normalize % tag)))}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; reconciler
@@ -269,8 +306,18 @@
         tree      (volatile! nil)
         render! (fn []
                   (vreset! dirty false)
-                  (vreset! tree (reconcile root-spec win @tree (normalize (component))))
-                  (swap! current assoc :tree @tree))]
+                  (try
+                    ;; normalize first: it validates the whole tree before
+                    ;; reconcile mutates any widget
+                    (let [vtree (normalize (component))]
+                      (vreset! tree (reconcile root-spec win @tree vtree))
+                      (reset! last-error nil)
+                      (swap! current assoc :tree @tree :error nil))
+                    (catch Throwable t
+                      ;; keep the old tree and keep pumping GTK, so the window
+                      ;; stays alive and the next good render recovers it
+                      (report! "render failed" t)
+                      (swap! current assoc :error @last-error))))]
     (reset! current {:window win :tree nil :stop! #(vreset! running false)})
     (g/window-set-title win title)
     (g/window-set-default-size win width height)
@@ -285,18 +332,20 @@
     (render!)
     (g/window-present win)
 
-    (while @running
-      ;; drain whatever GTK has queued, bounded so a busy source cannot
-      ;; starve the re-render below
-      (loop [i 0]
-        (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
-          (recur (inc i))))
-      (when @dirty (render!))
-      (Thread/sleep 8))
-    ;; asked to stop from elsewhere: tear the window down here, on this thread
-    (when-not @destroyed
-      (g/window-destroy win)
-      (loop [i 0] (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
-                    (recur (inc i)))))
-    (reset! current nil)
+    (try
+      (while @running
+        ;; drain whatever GTK has queued, bounded so a busy source cannot
+        ;; starve the re-render below
+        (loop [i 0]
+          (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
+            (recur (inc i))))
+        (when @dirty (render!))
+        (Thread/sleep 8))
+      (finally
+        ;; whatever happened, do not leave an unpumped window on screen
+        (when-not @destroyed
+          (g/window-destroy win)
+          (loop [i 0] (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
+                        (recur (inc i)))))
+        (reset! current nil)))
     nil))

@@ -205,6 +205,40 @@ a save. Keep `ui/run` out of the top level or a save opens a second window.
 `test/dev_test.clj` drives all four against a live window and reads the results
 out of the real `GtkLabel`.
 
+## When a view is broken
+
+A typo in a view -- `[:label "foo!"]` instead of `[:label {:label "foo!"}]` --
+used to freeze the window. The exception escaped `render!`, escaped the main
+loop, and killed the thread. Nothing pumped GTK after that, so the window sat
+there unresponsive, and because it died inside a `future` the error was
+swallowed: no message at all. `ui/close!` could not help either, since the loop
+that destroys the window was gone.
+
+Now a failed render is contained. The window keeps pumping, the last good render
+stays on screen, and the error is printed:
+
+```
+[gtk] render failed: invalid hiccup inside :label: "foo!"
+  expected a vector like [:label {:label "hi"}], a seq of those, or nil
+  a bare string is not a child -- write [:label {:label "foo!"}]
+       {:form "foo!", :parent :label}
+```
+
+Fix the view, re-render, and it recovers. Nothing to restart.
+
+Three things make that work:
+
+- **`normalize` validates the whole tree before `reconcile` touches a widget**,
+  so a malformed view is rejected without half-mutating the window.
+- **Event handlers are wrapped**, so an exception in your `:on-click` is reported
+  instead of crossing back into C, where behaviour is undefined.
+- **Errors are deduplicated.** With `dev/auto-refresh!` running, a broken view
+  would otherwise print ten times a second.
+
+The last failure is kept in `gtk.core/last-error` and on `(:error @ui/current)`,
+and clears on the next good render. `test/error_recovery_test.clj` covers a bad
+child, an unknown widget, recovery, and a throwing handler.
+
 ## How it works
 
 Three small namespaces, plus one for dev comfort:
@@ -293,6 +327,9 @@ POC scope. Missing: keyed children (list reordering re-labels in place instead
 of moving widgets), prop *removal* (setting a prop back to nil is ignored),
 CSS class removal, more widgets, multiple windows, `GtkApplication` integration,
 and path-based subscriptions instead of whole-tree diffing.
+
+No error is shown *in* the window -- it goes to stderr, so with no terminal in
+view a broken render looks like nothing happened.
 
 `gtk.dev` is dev-only and unpolished too: one window at a time, `watch-files!`
 polls rather than using inotify, and there is no `require`-graph awareness, so

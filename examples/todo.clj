@@ -32,7 +32,7 @@
                                       (fn [v] (vec (concat (subvec v 0 i)
                                                            (subvec v (inc i))))))}]])
        items)]
-     [:label {:label (str (count (filter :done? items)) " / " (count items) " done")}]]))
+     [:label {:label (str (count (filter :done? items)) " / " (count items) " done 12")}]]))
 
 (defn app []
   (let [state (r/atom {:draft "" :items []})]
