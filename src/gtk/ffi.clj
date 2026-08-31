@@ -21,6 +21,7 @@
 (defcfn window-set-default-size "gtk_window_set_default_size" [:pointer :int :int] :void)
 (defcfn window-set-child "gtk_window_set_child" [:pointer :pointer] :void)
 (defcfn window-present "gtk_window_present" [:pointer] :void)
+(defcfn window-destroy "gtk_window_destroy" [:pointer] :void)
 
 ;; -- widget (common) --------------------------------------------------------
 (defcfn widget-set-sensitive "gtk_widget_set_sensitive" [:pointer :int] :void)

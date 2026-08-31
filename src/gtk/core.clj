@@ -241,6 +241,14 @@
   []
   (r/invalidate!))
 
+(defn close!
+  "Closes the running window and lets its main loop return. Safe from any
+   thread: it only flips a flag, and the window is destroyed by the loop
+   itself, on the thread GTK expects."
+  []
+  (when-let [f (:stop! @current)] (f))
+  nil)
+
 (defn run
   "Opens a window, renders `component` (a fn returning hiccup) into it and
    drives the GTK main loop until the window is closed.
@@ -254,19 +262,22 @@
   [component & {:keys [title width height]
                 :or   {title "babashka + gtk4" width 360 height 200}}]
   (g/gtk-init)
-  (let [win     (g/window-new)
-        running (volatile! true)
-        dirty   (volatile! true)
-        tree    (volatile! nil)
+  (let [win       (g/window-new)
+        running   (volatile! true)
+        destroyed (volatile! false)
+        dirty     (volatile! true)
+        tree      (volatile! nil)
         render! (fn []
                   (vreset! dirty false)
                   (vreset! tree (reconcile root-spec win @tree (normalize (component))))
                   (swap! current assoc :tree @tree))]
-    (reset! current {:window win :tree nil})
+    (reset! current {:window win :tree nil :stop! #(vreset! running false)})
     (g/window-set-title win title)
     (g/window-set-default-size win width height)
     (let [cb (ffi/callback (ffi/global-arena)
-                           (fn [_ _] (vreset! running false))
+                           (fn [_ _]
+                             (vreset! destroyed true)
+                             (vreset! running false))
                            [:pointer :pointer] :void)]
       (g/signal-connect-data win "destroy" cb nil nil 0))
 
@@ -282,4 +293,10 @@
           (recur (inc i))))
       (when @dirty (render!))
       (Thread/sleep 8))
+    ;; asked to stop from elsewhere: tear the window down here, on this thread
+    (when-not @destroyed
+      (g/window-destroy win)
+      (loop [i 0] (when (and (< i 64) (g/<-gbool (g/main-iteration nil 0)))
+                    (recur (inc i)))))
+    (reset! current nil)
     nil))

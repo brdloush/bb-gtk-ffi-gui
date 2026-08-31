@@ -44,6 +44,98 @@ bb tasks      # list them
 
 Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`).
 
+## REPL workflow
+
+You can keep the window open and reshape it while it runs. Two kinds of change,
+and they behave differently.
+
+**State changes are automatic.** That is the whole point of the reactive atom:
+its watch marks the tree dirty, the loop notices, and only the props that
+actually changed get pushed into GTK.
+
+**Code changes are not.** Redefining a function touches no atom, so nothing
+marks the tree dirty and the window keeps showing the old render. Two things
+make a redef land:
+
+1. reach the view **through a var**, so the new fn is picked up:
+   `(#'home state)`, not `(home state)`
+2. re-render, either by calling `(ui/refresh!)` or by doing anything in the UI
+   that changes state
+
+That second point is easy to miss. A redef sits there pending until *something*
+re-renders. Type into an entry, tick a checkbox, click a button -- the resulting
+`swap!` marks the tree dirty, and the very next render already uses your new
+code. So `ui/refresh!` is really just "re-render now, without touching the UI".
+
+### Setting it up
+
+Structure the app so the view is a plain fn of state, called through its var:
+
+```clojure
+(defn home [state]
+  [:vbox {:spacing 10 :margin 16}
+   [:label {:label (str "items: " (count (:items @state)))}]
+   ...])
+
+(defn app []
+  (let [state (r/atom {:draft "" :items []})]
+    (fn [] (#'home state))))          ; <- the var, not the fn
+```
+
+`run` blocks, so start it on its own thread and keep the handle:
+
+```clojure
+(def app-thread (future (ui/run (app) :title "todo" :width 420 :height 320)))
+```
+
+Now edit `home`, re-evaluate just that form, and:
+
+```clojure
+(ui/refresh!)
+```
+
+The window repaints in place. Widgets are patched, not rebuilt, so focus and
+the caret in a half-typed entry survive.
+
+### Inspecting and stopping
+
+```clojure
+(:window @ui/current)                 ; the live GtkWindow pointer
+(-> @ui/current :tree :children)      ; the reconciled tree
+
+(ui/close!)                           ; shut the window, let the loop return
+```
+
+`ui/close!` is the clean way out. `future-cancel` kills the loop but leaves the
+window on screen. Closing the window with the mouse also ends the loop.
+
+### Threads
+
+Every GTK call happens on the thread that ran `gtk_init` -- the future's thread
+-- which is what GTK requires. `refresh!`, `close!` and `swap!` are safe to call
+from the REPL thread because they only flip a flag; the render and the teardown
+both happen back on the GTK thread.
+
+### Gotchas
+
+- `(home state)` captures the fn as it is now. Redefining `home` will not be
+  seen. Use `(#'home state)`.
+- Re-evaluating `(ui/run (app) ...)` calls `(app)` again, which builds a **fresh**
+  `r/atom`, so your state resets. To keep state across restarts, move it to a
+  top-level `def`.
+- One window at a time. `ui/current` is a single atom, so `refresh!` and `close!`
+  act on the most recently started window.
+
+`test/repl_reload_test.clj` drives this whole loop end to end -- redefines a view,
+calls `refresh!`, then reads the text back out of the real `GtkLabel`:
+
+```
+1) initial: old 7
+2) after swap!, no refresh needed: old 8
+3) after redef, before refresh! (stale, as expected): old 8
+4) after ui/refresh!: NEW 8 123
+```
+
 ## How it works
 
 Three small namespaces:
@@ -108,40 +200,6 @@ Babashka has no GTK main loop to hand over to, so `run` drives it:
 
 `g_main_context_iteration` is called non-blocking so the dirty check gets a turn.
 The drain is bounded so a busy source cannot starve rendering.
-
-### REPL workflow
-
-Two different kinds of change, and only one of them is automatic.
-
-A **state** change is seen on its own -- that is what the reactive atom watch is
-for. A **code** change is not: redefining a function touches no atom, so nothing
-marks the tree dirty and the window keeps showing the old render. `ui/refresh!`
-is the manual nudge.
-
-Two things are needed for a redef to actually land:
-
-1. reach the view through a var, so the new fn is picked up
-   -- `(#'home state)`, not `(home state)`
-2. call `(ui/refresh!)` afterwards
-
-```clojure
-;; start it off-thread so the prompt stays free
-(def app-thread (future (ui/run (app) :title "todo")))
-
-;; edit home, re-evaluate it, then
-(ui/refresh!)
-
-;; poke at the live widgets
-(:window @ui/current)
-(-> @ui/current :tree :children)
-
-(future-cancel app-thread)
-```
-
-Every GTK call happens on the thread that ran `gtk_init`, which is what GTK
-requires. `refresh!` and `swap!` from the REPL only flip a flag, so calling them
-from another thread is safe. `test/repl_reload_test.clj` drives this whole loop
-and reads the text back out of the real `GtkLabel`.
 
 ## Widgets
 

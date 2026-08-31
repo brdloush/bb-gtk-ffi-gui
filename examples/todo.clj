@@ -32,7 +32,7 @@
                                       (fn [v] (vec (concat (subvec v 0 i)
                                                            (subvec v (inc i))))))}]])
        items)]
-     [:label {:label (str (count (filter :done? items)) " / " (count items) " done 123")}]]))
+     [:label {:label (str (count (filter :done? items)) " / " (count items) " done")}]]))
 
 (defn app []
   (let [state (r/atom {:draft "" :items []})]
@@ -56,5 +56,5 @@
   (:window @ui/current)
   (-> @ui/current :tree :children)
 
-  ;; 4. done
-  (future-cancel app-thread))
+  ;; 4. shut the window and let the loop return
+  (ui/close!))
