@@ -54,9 +54,14 @@ and they behave differently.
 its watch marks the tree dirty, the loop notices, and only the props that
 actually changed get pushed into GTK.
 
-**Code changes are not.** Redefining a function touches no atom, so nothing
-marks the tree dirty and the window keeps showing the old render, even though
-the new code is already loaded.
+**Code changes are not, on their own.** Redefining a function touches no atom,
+so nothing marks the tree dirty and the window keeps showing the old render,
+even though the new code is already loaded.
+
+Turn on one of the [dev helpers](#dev-helpers) and that goes away -- they watch
+the vars, or just re-render on a timer. The rest of this section is what happens
+*without* them, which is worth knowing because it explains what those helpers
+are actually doing.
 
 You do *not* need `#'home` for this. A plain call like `(home state)` resolves
 through the var at call time in babashka, exactly as on the JVM, so a redef is
@@ -65,7 +70,7 @@ picked up on the next render. All that is missing is the render.
 So a redef sits pending until *something* re-renders. Type into an entry, tick a
 checkbox, click a button -- the resulting `swap!` marks the tree dirty, and the
 very next render already uses your new code. `ui/refresh!` is just "re-render
-now, without touching the UI", and `gtk.dev` automates that away entirely.
+now, without touching the UI".
 
 ### Setting it up
 
@@ -96,6 +101,9 @@ Now edit `home`, re-evaluate just that form, and:
 
 The window repaints in place. Widgets are patched, not rebuilt, so focus and
 the caret in a half-typed entry survive.
+
+That `refresh!` is the step the [dev helpers](#dev-helpers) remove. One
+`(dev/auto-refresh!)` at the start of a session and you never type it again.
 
 ### Inspecting and stopping
 
