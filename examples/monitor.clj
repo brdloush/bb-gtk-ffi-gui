@@ -23,19 +23,6 @@
 
 (def poll-ms 1000)
 
-(defn lean!
-  "Picks GSK's software renderer before the first window is realized.
-
-   This app draws flat lists and level bars -- nothing that needs a GPU. Asking
-   for cairo avoids mapping the whole GL/mesa stack into the process, which is
-   worth about 47 MB of resident memory and a little CPU, with pixel-identical
-   output. Set from inside so it holds however the app is launched.
-
-   The other half of staying small is `-Xmx`, which has to be on the command
-   line: see the monitor task in bb.edn."
-  []
-  (g/setenv "GSK_RENDERER" "cairo" 1))
-
 (defn- refresh-now!
   "Takes two readings back to back so the CPU figure is immediate rather than
    waiting for the next tick."
@@ -154,7 +141,6 @@
   (fn [] (home state)))
 
 (defn -main [& _]
-  (lean!)
   (let [stop (start-polling! state)]
     (try
       (ui/run (app)

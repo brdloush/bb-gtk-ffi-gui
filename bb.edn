@@ -15,7 +15,7 @@
            :requires ([babashka.process])
            :task (babashka.process/exec "bb" "-Xmx96m" "-m" "monitor")}
 
-  shot    {:doc "Write docs/<app>.png -- the app screenshots itself. bb shot [monitor|weather]"
+  shot    {:doc "Write docs/<app>.png -- the app screenshots itself. bb shot [monitor|weather|deck]"
            :requires ([babashka.process])
            :task (apply babashka.process/exec
                         "bb" "-Xmx96m" "-m" "shot" *command-line-args*)}
@@ -23,6 +23,11 @@
   weather {:doc "Run the Open-Meteo weather app (no API key needed)."
            :requires ([babashka.process])
            :task (babashka.process/exec "bb" "-Xmx96m" "-m" "weather")}
+
+  deck    {:doc "Present a markdown file. bb deck [path.md]"
+           :requires ([babashka.process])
+           :task (apply babashka.process/exec
+                        "bb" "-Xmx96m" "-m" "deck" *command-line-args*)}
 
   dev     {:doc "Start an nREPL server, then connect your editor and see gtk.dev."
            :task (shell "bb" "nrepl-server" "1667")}
@@ -40,6 +45,9 @@
                             "test/sysinfo_test.clj"
                             "test/screenshot_test.clj"
                             "test/openmeteo_test.clj"
-                            "test/weather_test.clj"]]
+                            "test/weather_test.clj"
+                            "test/input_test.clj"
+                            "test/motion_test.clj"
+                            "test/deckmd_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}

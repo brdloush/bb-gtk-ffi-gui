@@ -132,7 +132,8 @@ sends only the name you type.
 
 Everything in the plan held. Four things worth recording:
 
-- **It idles at 0.00% of a core**, 170 MB. Refreshing every 15 minutes rather
+- **It idles at 0.00% of a core**, 223 MB (170 MB while it still forced the
+  cairo renderer, which was later dropped everywhere -- see the deck plan). Refreshing every 15 minutes rather
   than every second means the blocking main loop really does nothing in between.
   The monitor's 1.5% is entirely its own once-a-second work.
 - **The dashboard collapsed to a 58px sliver** on first run. A `GtkBox` child

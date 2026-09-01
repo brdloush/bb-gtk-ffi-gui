@@ -12,6 +12,7 @@
             [gtk.adw :as adw]
             [gtk.core :as ui]
             [gtk.dev :as dev]
+            [deck]
             [monitor]
             [weather]))
 
@@ -22,16 +23,27 @@
               ;; startup includes class loading and the first paint, so the CPU
               ;; figure would read high; wait for it to settle
               :settle 7000
-              :start (fn [] (monitor/lean!) (monitor/start-polling! monitor/state))
+              :start (fn [] (monitor/start-polling! monitor/state))
               :app   (fn [] (monitor/app))
               :css   (fn [] monitor/css)
               :overlay! (fn [w] (reset! monitor/overlay w))}
+   "deck"    {:path "docs/deck.png"
+              :title "Deck"
+              :size [900 620]
+              :settle 1200
+              ;; page 1 is the bullets slide: shows type, markup and the chrome
+              :start (fn [] (deck/load-deck! "examples/talk.md")
+                       (swap! deck/state assoc :index 1)
+                       (fn []))
+              :app   (fn [] (deck/app))
+              :css   (fn [] deck/css)
+              :overlay! (fn [_] nil)}
    "weather" {:path "docs/weather.png"
               :title "Weather"
               :size [560 820]
               ;; one HTTP round trip, then a render
               :settle 4000
-              :start (fn [] (weather/lean!) (weather/start-polling!))
+              :start (fn [] (weather/start-polling!))
               :app   (fn [] (weather/app))
               :css   (fn [] weather/css)
               :overlay! (fn [w] (reset! weather/overlay w))}})

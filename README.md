@@ -12,8 +12,28 @@ window appears.
 
 ## The pretty ones
 
-Two examples do the arguing. Both render their own screenshots, at the display's
+Three examples do the arguing. Each renders its own screenshot, at the display's
 full pixel density, via `bb shot`.
+
+### Deck
+
+`bb deck examples/talk.md` -- a markdown presenter, driven entirely by the
+keyboard.
+
+![Deck](docs/deck.png)
+
+Slides animate between each other, and the animation is **declarative**: the
+view sets `:page` on a `:carousel` and the spec turns that into
+`adw_carousel_scroll_to`. So the app stays a pure function of state even though
+it moves.
+
+Edit the markdown while it is on screen and the slides reload, keeping your
+place.
+
+213 MB, 0.33% of a core, and a steady 62 fps while animating.
+
+`examples/deckmd.clj` is the parser (pure, and the only place that knows about
+Pango escaping), `examples/deck.clj` the app.
 
 ### Weather
 
@@ -25,7 +45,7 @@ The colour is the point: weather code plus day/night picks one of 14 gradients,
 and changing conditions only swaps a CSS class. Big light type, an hourly strip
 that scrolls, a 7-day list, and a details group.
 
-It **idles at 0.00% of a core**, 170 MB. It refreshes every 15 minutes, so the
+It **idles at 0.00% of a core**, 223 MB. It refreshes every 15 minutes, so the
 blocking main loop genuinely does nothing in between. Works offline too: the
 last response is cached, so the window opens with real content and an honest
 banner saying how old it is.
@@ -41,8 +61,8 @@ reason the app looks designed rather than assembled.
 ![System Monitor](docs/monitor.png)
 
 Look at the row it highlights. An idle window built this way costs **0.00% of a
-core**; the monitor measures 1.5% over eight seconds, and all of that is its own
-work -- it re-reads `/proc` and repaints fourteen rows every second. The figure
+core**; the monitor measures under 1% over eight seconds, and all of that is its
+own work -- it re-reads `/proc` and repaints fourteen rows every second. The figure
 in the picture is a live one-second sample, so it jitters between 1 and 3%. Next
 to it is a JetBrains IDE using 4.5 GB.
 
@@ -53,16 +73,41 @@ bindings are 279. Core did not have to change much to allow it -- see
 
 ### Keeping it small
 
-239 MB down to 162, in two steps:
+`-Xmx96m` takes the monitor from 239 MB to 216. bb is a GraalVM native image and
+**does** honour `-Xmx` -- proved by `-Xmx32m` dying and `-Xmx2000m` not. It has
+to be on the command line, so the app tasks re-exec babashka with it via
+`babashka.process/exec`, which keeps it to one process.
 
-| | saves | how |
-| --- | --- | --- |
-| `GSK_RENDERER=cairo` | ~47 MB | these UIs are lists, type and gradients; nothing needs a GPU, and not mapping the GL/mesa stack is free money. Output is pixel-identical. Set from inside the process in `monitor/lean!` and `weather/lean!`, so it holds however you launch it. |
-| `-Xmx96m` | ~30 MB | bb is a GraalVM native image and **does** honour `-Xmx`. It has to be on the command line, so the app tasks re-exec babashka with it -- via `babashka.process/exec`, so it stays one process. |
+`-Xmx64m` saves another 10 MB and still runs; below about 48 MB the app dies on
+startup. The remaining ~200 MB is mostly the babashka binary itself (63 MB
+resident doing nothing) plus GTK, libadwaita and the theme.
 
-`-Xmx64m` works too and saves another 7 MB, but 96 leaves headroom; below about
-48 MB the app dies on startup. The remaining ~160 MB is mostly the babashka
-binary itself (63 MB resident doing nothing) plus GTK and its theme.
+#### The renderer, and a mistake worth keeping
+
+`GSK_RENDERER=cairo` saves about 50 MB by not mapping the GL/mesa stack, and for
+a UI that never animates the output is pixel-identical. Two of these apps used
+to force it.
+
+They no longer do, and the reason is worth writing down. Counting real frames
+with a GTK tick callback while a carousel animated:
+
+| renderer | animating | monitor RSS | monitor CPU |
+| --- | --- | --- | --- |
+| `cairo` | **36 fps** | 165 MB | 1.00% |
+| default | 62 fps | 213 MB | **0.83%** |
+| `vulkan` | 65 fps | 211 MB | 1.33% |
+
+Software rendering cannot repaint a full-screen window at 60 Hz, so the deck was
+visibly choppy. But look at the CPU column: cairo does not even win there --
+the default is *cheaper*. So cairo buys 50 MB and nothing else, at the cost of a
+per-app trap that has to be remembered.
+
+All three now use whatever GTK picks, which is what every other GTK app on the
+machine does. `vulkan` is no better on memory, mixed on CPU, and depends on
+drivers that may not be present, so it is not worth forcing either.
+
+If you want the 50 MB on a static UI of your own, set `GSK_RENDERER=cairo` in
+the environment and measure your own animation cost first.
 
 ## The counter
 
@@ -89,6 +134,7 @@ binary itself (63 MB resident doing nothing) plus GTK and its theme.
 ## Run it
 
 ```bash
+bb deck examples/talk.md   # the markdown presenter
 bb weather    # the Open-Meteo weather app
 bb monitor    # the libadwaita system monitor
 bb counter    # the glimmer counter
@@ -96,7 +142,8 @@ bb todo       # dynamic list, entry, check buttons
 
 bb shot weather   # regenerate a screenshot (the app shoots itself)
 bb shot monitor
-bb test       # all thirteen test files (see Tests below)
+bb shot deck
+bb test       # all sixteen test files (see Tests below)
 bb dev        # nREPL server on 1667, for editor-driven work
 
 bb tasks      # list them
@@ -213,6 +260,12 @@ Calling a widget function from the wrong thread does not raise -- it segfaults.
   top-level `defonce`.
 - One window at a time. `ui/current` is a single atom, so `refresh!` and `close!`
   act on the most recently started window.
+- **A NULL pointer from C is not `nil`.** It arrives as a live MemorySegment at
+  address 0, so `nil?` and `some?` both lie about it. Use `gtk.ffi/null?`.
+  Walking a sibling chain with `nil?` runs off the end and GTK starts printing
+  CRITICALs.
+- `(ui/run view ...)` captures the fn value. Pass `#'view` if you intend to
+  redefine it and have the running window notice.
 
 `test/repl_reload_test.clj` drives this whole loop end to end -- redefines a view,
 calls `refresh!`, then reads the text back out of the real `GtkLabel`:
@@ -336,7 +389,7 @@ Three small namespaces, plus two optional ones:
 | `src/gtk/ratom.clj` | 25 | reactive atom: a normal atom whose watch marks the UI dirty |
 | `src/gtk/core.clj` | 506 | hiccup -> widgets, plus a reconciler and the main loop |
 | `src/gtk/dev.clj` | 295 | dev-only: var watches, auto-refresh, file watching, screenshots |
-| `src/gtk/adw.clj` | 320 | optional: libadwaita bindings and 17 tags. Core does not know it exists |
+| `src/gtk/adw.clj` | 381 | optional: libadwaita bindings and 19 tags. Core does not know it exists |
 
 ### Rendering
 
@@ -438,6 +491,9 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | | what it is for |
 | --- | --- |
 | `widgets` / `signals` are atoms | `register-widget!` and `register-signal!` add tags and events from another namespace |
+| signals carry `:argtypes` / `:rettype` | not every signal is `(instance, data) -> void`. A key handler is five arguments and returns whether it consumed the event |
+| signals carry `:controller` / `:attach` | input arrives through a `GtkEventController`, which you connect to and then add to a widget -- `:attach :window` puts it on the toplevel |
+| specs carry `:after-children` | for a container whose props refer to its children. A carousel's initial `:page` is ignored otherwise, because `:apply` runs before the children exist |
 | `:append` / `:remove` get the child's props | lets a container read a `:slot` prop and put the child somewhere specific |
 | `run`'s `:window` option | `{:ctor f :set-content f}`. `AdwWindow` has no titlebar of its own, which is what makes an Adw header bar sit flush |
 | `run`'s `:on-ready` | `(f window root-node)`, once, after `gtk_init` and the first render. For installing CSS (needs a display) or keeping a pointer to a widget you just built |
@@ -465,6 +521,8 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | `:scroll` | `:h` `:v` scrollbar policy: `:automatic` `:never` `:always` `:external` | one child |
 | `:banner` | `:title` `:revealed` | -- |
 | `:spinner` | -- | -- |
+| `:carousel` | `:page` (an index -- changing it **animates**), `:animate`, `:drag`, `:wheel` | pages |
+| `:revealer` | `:revealed` `:duration` | one child |
 | `:level` | `:value` `:min` `:max` `:width` | -- |
 | `:icon` | `:icon` `:size` | -- |
 | `:icon-button` | `:icon` | -- |
@@ -492,7 +550,7 @@ the common props below.
 | --- | --- | --- | --- |
 | `:vbox` | `:spacing` (default 0) | -- | any number |
 | `:hbox` | `:spacing` (default 0) | -- | any number |
-| `:label` | `:label` | -- | text only |
+| `:label` | `:label` `:markup` `:wrap` `:xalign` | -- | text only |
 | `:button` | `:label` | `:on-click` | text only |
 | `:check` | `:label` `:active` | `:on-toggle` | text only |
 | `:entry` | `:value` `:placeholder` | `:on-change` `:on-activate` | text only |
@@ -508,12 +566,39 @@ Common props, on every widget:
 | `:halign` `:valign` | `:fill` `:start` `:end` `:center` `:baseline` | `:fill` |
 | `:class` | a CSS class name, or a collection of them | none |
 
+`:markup` is Pango markup and wins over `:label`. Whatever builds it **must
+escape first** -- a bare `&` or `<` breaks the label. `deckmd/escape` shows the
+shape.
+
 A `GtkBox` child takes its **natural** size unless you set `:hexpand`/`:vexpand`.
 A scrolled window's natural height is tiny, so a `:scroll` inside a box without
 `:vexpand true` collapses to a sliver -- nothing errors, it just looks broken.
 
 Handler arguments: `:on-click` gets none, `:on-change` and `:on-activate` get the
 entry's current text, `:on-toggle` gets the new boolean.
+
+### Keys
+
+`:on-key` works on any widget, but always listens at the **toplevel** -- a
+controller on a widget that never takes focus would never fire. The handler gets
+a map, and returning truthy stops the key going any further:
+
+```clojure
+[:bin {:on-key (fn [{:keys [key ctrl? shift?]}]
+                 (case key
+                   "Right" (do (next-slide!) true)
+                   "Escape" (do (ui/close!) true)
+                   nil))}
+ ...]
+```
+
+The key is a **name**, from `gdk_keyval_name`: `"Right"`, `"space"`, `"Escape"`,
+`"Page_Down"`, `"F5"`, `"a"`. No table to maintain.
+
+Keys are not an ordinary signal: they arrive through a `GtkEventController`,
+with a different callback signature and a return value. That is why entries in
+`gtk.core/signals` may carry `:argtypes`, `:rettype`, `:controller` and
+`:attach` -- see [Extension points](#extension-points).
 
 ### Text children
 
@@ -626,6 +711,9 @@ are checking pointer identity and hiccup normalization respectively.
 | `screenshot_test.clj` | a PNG really is written, at the display's scale rather than the logical size; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
 | `openmeteo_test.clj` | all 28 WMO codes map to a label, icon and sky, day and night; formatting; the view model; the staleness banner's thresholds |
 | `weather_test.clj` | config defaults, round-trip and recovery from a corrupt file; the offline path builds a whole tree from cached data and the real temperature appears on screen |
+| `input_test.clj` | keys arrive as names with modifiers; the return value decides whether the event stops; a throwing handler is contained and reports "not handled"; ordinary signals still work |
+| `motion_test.clj` | changing `:page` really animates rather than jumping, `:animate false` jumps, an unrelated re-render does not re-animate, and `nth-child` stops at the end of the sibling chain |
+| `deckmd_test.clj` | markdown to slides, Pango escaping (including an injection attempt), and every key-to-action transition |
 
 ## Not done
 

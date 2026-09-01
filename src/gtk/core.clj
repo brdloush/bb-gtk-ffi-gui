@@ -21,6 +21,9 @@
 ;; signals
 ;; ---------------------------------------------------------------------------
 
+(declare current)   ; defined with `run`; connect! needs the toplevel for
+                    ; controllers, which is only known once a window exists
+
 (def ^{:doc "Last thing that blew up, so a REPL can look at it."} last-error
   (atom nil))
 
@@ -37,34 +40,78 @@
     nil))
 
 (def signals
-  "hiccup prop -> GTK signal + how to call the user's handler.
-   An atom so an optional namespace can add its own."
+  "hiccup prop -> how to wire it up. An atom so an optional namespace can add
+   its own.
+
+     :signal    the GTK signal name
+     :invoke    (fn [user-fn widget raw-args] ...) -- raw-args is what C passed,
+                including the instance and the user-data pointer
+     :argtypes  the callback's signature. Default [:pointer :pointer]
+     :rettype   default :void. With :int, a truthy handler return becomes 1
+     :controller (fn [] ptr) for input that arrives through a
+                GtkEventController rather than a signal on the widget
+     :attach    :window to add the controller to the toplevel instead of the
+                widget, which is what key handling wants"
   (atom
   {:on-click  {:signal "clicked"
-               :invoke (fn [f _w] (f))}
+               :invoke (fn [f _w _args] (f))}
    :on-change {:signal "changed"
-               :invoke (fn [f w] (f (g/editable-get-text w)))}
+               :invoke (fn [f w _args] (f (g/editable-get-text w)))}
    :on-toggle {:signal "toggled"
-               :invoke (fn [f w] (f (g/<-gbool (g/check-button-get-active w))))}
+               :invoke (fn [f w _args] (f (g/<-gbool (g/check-button-get-active w))))}
    :on-activate {:signal "activate"
-                 :invoke (fn [f w] (f (g/editable-get-text w)))}}))
+                 :invoke (fn [f w _args] (f (g/editable-get-text w)))}
+
+   ;; Keys are not a signal on a widget: you make a controller, connect to it,
+   ;; and add it to a widget. Added to the toplevel, because a controller on a
+   ;; widget that never takes focus would never see anything.
+   :on-key    {:signal "key-pressed"
+               :controller g/event-controller-key-new
+               :attach :window
+               :argtypes [:pointer :int :int :int :pointer]
+               :rettype :int
+               :invoke (fn [f _w [_ctrl keyval _keycode state _data]]
+                         (when-let [name (g/keyval-name keyval)]
+                           (f (assoc (g/modifiers state) :key name))))}}))
+
+(defonce ^{:doc "Controllers created for :on-key and friends, newest last.
+  Kept so tests and a REPL can reach them; nothing in rendering reads this."}
+  controllers
+  (atom []))
 
 (defn- connect!
-  "Connects one GTK signal to a stable C callback that reads the current
-   handler out of `holder`. The closure captured at creation time therefore
-   never goes stale when a later render supplies a new handler fn."
+  "Connects one signal to a stable C callback that reads the current handler out
+   of `holder`. The closure captured at creation time therefore never goes stale
+   when a later render supplies a new handler fn."
   [widget prop holder]
-  (let [{:keys [signal invoke]} (@signals prop)
+  (let [{:keys [signal invoke argtypes rettype controller attach]
+         :or   {argtypes [:pointer :pointer] rettype :void}} (@signals prop)
+        void?   (= :void rettype)
+        target  (if controller (controller) widget)
+        ;; a handler that returns nothing means "not handled", which for a
+        ;; :rettype :int signal like key-pressed has to be 0, not nil
+        ->ret   (fn [v] (cond void?      nil
+                              (number? v) v
+                              v           1
+                              :else       0))
         cb (ffi/callback (ffi/global-arena)
-                         (fn [_instance _data]
+                         (fn [& args]
                            ;; never let an exception cross back into C
                            (try
-                             (when-let [f @holder]
-                               (invoke f widget))
+                             (->ret (when-let [f @holder]
+                                      (invoke f widget (vec args))))
                              (catch Throwable t
-                               (report! (str prop " handler failed") t))))
-                         [:pointer :pointer] :void)]
-    (g/signal-connect-data widget signal cb nil nil 0)))
+                               (report! (str prop " handler failed") t)
+                               (->ret nil))))
+                         argtypes rettype)]
+    (g/signal-connect-data target signal cb nil nil 0)
+    (when controller
+      ;; :window because key events go to the toplevel; a controller on a
+      ;; widget that never takes focus would never fire
+      (let [host (if (= :window attach) (:window @current) widget)]
+        (g/widget-add-controller host target)
+        (swap! controllers conj {:prop prop :controller target :host host})))
+    target))
 
 ;; ---------------------------------------------------------------------------
 ;; common props
@@ -132,6 +179,9 @@
      :text-prop  which prop string/number children fold into  (optional)
      :append     (fn [parent child-ptr child-props] ...)       (containers only)
      :remove     (fn [parent child-ptr child-props] ...)       (containers only)
+     :after-children (fn [widget props] ...)  (optional) run once at creation,
+                 after the children are in place -- for a container whose props
+                 refer to its children, like a carousel's initial page
 
    `child-props` is there so a container can honour a :slot prop, which is how
    libadwaita's prefix/suffix/top-bar slots are addressed."
@@ -139,11 +189,26 @@
   {:vbox   (box-spec g/VERTICAL)
    :hbox   (box-spec g/HORIZONTAL)
 
+   ;; :markup is Pango markup and wins over :label when both are given. Whatever
+   ;; builds it must escape first -- see the deck example's `escape`.
    :label  {:text-prop :label
-            :ctor  (fn [p] (g/label-new (str (:label p ""))))
+            :ctor  (fn [p]
+                     (let [w (g/label-new nil)]
+                       (if (:markup p)
+                         (g/label-set-markup w (:markup p))
+                         (g/label-set-text w (str (:label p ""))))
+                       (g/label-set-wrap w (g/->gbool (:wrap p)))
+                       (when-let [x (:xalign p)] (g/label-set-xalign w (float x)))
+                       w))
             :apply (fn [w p changed]
-                     (when (contains? changed :label)
-                       (g/label-set-text w (str (:label p "")))))}
+                     (when (or (contains? changed :markup) (contains? changed :label))
+                       (if (:markup p)
+                         (g/label-set-markup w (:markup p))
+                         (g/label-set-text w (str (:label p "")))))
+                     (when (contains? changed :wrap)
+                       (g/label-set-wrap w (g/->gbool (:wrap p))))
+                     (when (contains? changed :xalign)
+                       (g/label-set-xalign w (float (:xalign p 0.5)))))}
 
    :button {:text-prop :label
             :ctor  (fn [p] (g/button-new-with-label (str (:label p ""))))
@@ -329,12 +394,17 @@
       (connect! widget prop holder))
     (apply-common! widget props {} (prop-keys props))
     ((:apply spec) widget props #{})            ; ctor already set the basics
-    (assoc node :children
-           (mapv (fn [child]
-                   (let [c (create child)]
-                     ((:append spec) widget (:widget c) (:props c))
-                     c))
-                 children))))
+    (let [node (assoc node :children
+                      (mapv (fn [child]
+                              (let [c (create child)]
+                                ((:append spec) widget (:widget c) (:props c))
+                                c))
+                            children))]
+      ;; props that need the children to exist. Without this a carousel's
+      ;; initial :page is silently ignored, because :apply above ran when the
+      ;; container was still empty.
+      (when-let [f (:after-children spec)] (f widget props))
+      node)))
 
 (defn- reconcile
   "Diffs `new-vnode` against `old-node` under `parent-spec`/`parent-widget`.

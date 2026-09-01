@@ -159,8 +159,13 @@ Asked after the fact: can bb be told to use less? Yes, and it was worth doing
 since the app reports its own footprint.
 
 - `GSK_RENDERER=cairo` -- 239 MB to 191. Nothing in this UI needs a GPU, and the
-  output is pixel-identical. Set with `g_setenv` from inside the process, before
-  the first window is realized, so it holds however the app is launched.
+  output is pixel-identical.
+
+  **Later reversed.** The deck example animates, and cairo managed only 36 fps
+  against GL's 62. Worse, the CPU measurements showed cairo was not even cheaper
+  on a static UI (1.00% against 0.83%). It bought 50 MB and a per-app trap, so
+  all three examples now use whatever GTK picks. See the renderer section in the
+  README.
 - `-Xmx96m` -- 191 MB to 162. bb is a GraalVM native image and honours `-Xmx`;
   proved by `-Xmx32m` dying and `-Xmx2000m` not. It has to be on the command
   line, so the tasks re-exec babashka via `babashka.process/exec`, which keeps

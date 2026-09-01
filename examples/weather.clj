@@ -250,18 +250,11 @@
 ;; run
 ;; ---------------------------------------------------------------------------
 
-(defn lean!
-  "Software renderer: this UI is type, gradients and icons -- no GPU needed,
-   and it saves about 47 MB. See the monitor example for the measurements."
-  []
-  (g/setenv "GSK_RENDERER" "cairo" 1))
-
 (defn app []
   (show-cached!)
   (fn [] (home state)))
 
 (defn -main [& _]
-  (lean!)
   (let [stop (start-polling!)]
     (try
       (ui/run (app)

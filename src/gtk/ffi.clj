@@ -13,6 +13,30 @@
 (defcfn idle-add "g_idle_add" [:pointer :pointer] :int)
 (defcfn main-context-wakeup "g_main_context_wakeup" [:pointer] :void)
 
+;; -- input (event controllers) ----------------------------------------------
+(defcfn event-controller-key-new "gtk_event_controller_key_new" [] :pointer)
+(defcfn widget-add-controller "gtk_widget_add_controller" [:pointer :pointer] :void)
+(defcfn keyval-name "gdk_keyval_name" [:int] :string)
+(defcfn keyval-to-unicode "gdk_keyval_to_unicode" [:int] :int)
+
+(def modifier
+  "GdkModifierType bits we care about."
+  {:shift 1 :lock 2 :ctrl 4 :alt 8 :super (bit-shift-left 1 26)})
+
+(defn modifiers
+  "Turns a GdkModifierType bitfield into {:shift? .. :ctrl? .. :alt? ..}."
+  [state]
+  (let [s (or state 0)]
+    {:shift? (pos? (bit-and s (:shift modifier)))
+     :ctrl?  (pos? (bit-and s (:ctrl modifier)))
+     :alt?   (pos? (bit-and s (:alt modifier)))
+     :super? (pos? (bit-and s (:super modifier)))}))
+
+;; -- window ---------------------------------------------------------------
+(defcfn window-fullscreen "gtk_window_fullscreen" [:pointer] :void)
+(defcfn window-unfullscreen "gtk_window_unfullscreen" [:pointer] :void)
+(defcfn window-is-fullscreen "gtk_window_is_fullscreen" [:pointer] :int)
+
 ;; -- signals ----------------------------------------------------------------
 (defcfn signal-connect-data "g_signal_connect_data"
   [:pointer :string :pointer :pointer :pointer :int] :long)
@@ -49,6 +73,9 @@
 (defcfn label-new "gtk_label_new" [:string] :pointer)
 (defcfn label-set-text "gtk_label_set_text" [:pointer :string] :void)
 (defcfn label-get-text "gtk_label_get_text" [:pointer] :string)
+(defcfn label-set-markup "gtk_label_set_markup" [:pointer :string] :void)
+(defcfn label-set-wrap "gtk_label_set_wrap" [:pointer :int] :void)
+(defcfn label-set-xalign "gtk_label_set_xalign" [:pointer :float] :void)
 
 ;; -- button -----------------------------------------------------------------
 (defcfn button-new-with-label "gtk_button_new_with_label" [:string] :pointer)
@@ -95,6 +122,16 @@
 (defcfn getenv "g_getenv" [:string] :string)
 
 ;; -- helpers ----------------------------------------------------------------
+
+(defn null?
+  "Whether a pointer C handed back is NULL.
+
+   Necessary because a NULL return is *not* nil: it arrives as a live
+   MemorySegment at address 0, so `nil?` and `some?` both lie about it. Walking
+   a sibling chain with `nil?` runs off the end and GTK starts printing
+   CRITICALs."
+  [p]
+  (ffi/null? p))
 (def HORIZONTAL 0)
 (def VERTICAL 1)
 

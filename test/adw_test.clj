@@ -66,7 +66,7 @@
    GtkRevealer inside a GtkWindowHandle -- so check the chain, not the parent."
   [w]
   (loop [x (widget-parent w) acc []]
-    (if (or (nil? x) (> (count acc) 12)) acc
+    (if (or (g/null? x) (> (count acc) 12)) acc
         (recur (widget-parent x) (conj acc (type-name x))))))
 
 (println "2) header chain:" (ancestors-of header))

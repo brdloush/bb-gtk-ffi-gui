@@ -14,6 +14,8 @@
      :toast-overlay  AdwToastOverlay, shows toasts over its child
      :status-page    AdwStatusPage, for empty states
      :bin            AdwBin, a plain single-child holder
+     :carousel       AdwCarousel -- :page is an index, and changing it animates
+     :revealer       GtkRevealer -- :revealed toggles with a transition
      :clamp          AdwClamp, keeps content a readable width
      :banner         AdwBanner, an inline notice strip
      :spinner        AdwSpinner
@@ -89,6 +91,21 @@
 (defcfn status-set-icon-name "adw_status_page_set_icon_name" [:pointer :string] :void)
 
 ;; plain GTK4 pieces the Adw layouts need
+(defcfn carousel-new "adw_carousel_new" [] :pointer)
+(defcfn carousel-append "adw_carousel_append" [:pointer :pointer] :void)
+(defcfn carousel-remove "adw_carousel_remove" [:pointer :pointer] :void)
+(defcfn carousel-scroll-to "adw_carousel_scroll_to" [:pointer :pointer :int] :void)
+(defcfn carousel-get-position "adw_carousel_get_position" [:pointer] :double)
+(defcfn carousel-get-n-pages "adw_carousel_get_n_pages" [:pointer] :int)
+(defcfn carousel-set-interactive "adw_carousel_set_allow_scroll_wheel" [:pointer :int] :void)
+(defcfn carousel-set-mouse-drag "adw_carousel_set_allow_mouse_drag" [:pointer :int] :void)
+(defcfn carousel-set-indicator "adw_carousel_set_reveal_duration" [:pointer :int] :void)
+(defcfn revealer-new "gtk_revealer_new" [] :pointer)
+(defcfn revealer-set-child "gtk_revealer_set_child" [:pointer :pointer] :void)
+(defcfn revealer-set-reveal "gtk_revealer_set_reveal_child" [:pointer :int] :void)
+(defcfn revealer-set-transition-duration "gtk_revealer_set_transition_duration" [:pointer :int] :void)
+(defcfn widget-get-first-child "gtk_widget_get_first_child" [:pointer] :pointer)
+(defcfn widget-get-next-sibling "gtk_widget_get_next_sibling" [:pointer] :pointer)
 (defcfn clamp-new "adw_clamp_new" [] :pointer)
 (defcfn clamp-set-child "adw_clamp_set_child" [:pointer :pointer] :void)
 (defcfn clamp-set-maximum-size "adw_clamp_set_maximum_size" [:pointer :int] :void)
@@ -129,6 +146,15 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- slot-of [props] (:slot props :content))
+
+(defn- nth-child
+  "The nth child widget of a container, by walking the sibling chain. Lets a
+   spec reach a child it was not handed."
+  [parent n]
+  (loop [w (widget-get-first-child parent) i 0]
+    (cond (g/null? w) nil                ; not (nil? w): see gtk.ffi/null?
+          (= i n)     w
+          :else       (recur (widget-get-next-sibling w) (inc i)))))
 
 (defn- single-child
   "A container that holds exactly one child, ignoring slots."
@@ -266,6 +292,41 @@
 
    :spinner      {:ctor  (fn [_] (spinner-new))
                   :apply (fn [_ _ _] nil)}
+
+   ;; Motion, declaratively. :page is an index; when it changes, :apply
+   ;; animates there. So an animation is a side effect of a prop change and the
+   ;; app stays a pure function of state.
+   ;;
+   ;; scroll_to needs the child widget and :apply only gets the parent, so walk
+   ;; the sibling chain rather than threading our tree into the spec.
+   :carousel     {:ctor   (fn [p]
+                            (doto (carousel-new)
+                              (carousel-set-mouse-drag (g/->gbool (:drag p false)))
+                              (carousel-set-interactive (g/->gbool (:wheel p false)))))
+                  :apply  (fn [w p changed]
+                            (when (contains? changed :page)
+                              (when-let [child (nth-child w (:page p 0))]
+                                (carousel-scroll-to w child
+                                                    (g/->gbool (:animate p true))))))
+                  ;; the pages do not exist when :ctor and :apply run, so the
+                  ;; starting page has to be set once they do -- and without
+                  ;; animation, since there is nothing to animate from
+                  :after-children (fn [w p]
+                                    (when-let [child (nth-child w (:page p 0))]
+                                      (carousel-scroll-to w child 0)))
+                  :append (fn [parent child _props] (carousel-append parent child))
+                  :remove (fn [parent child _props] (carousel-remove parent child))}
+
+   :revealer     (merge {:ctor  (fn [p]
+                                 (doto (revealer-new)
+                                   (revealer-set-transition-duration (int (:duration p 250)))
+                                   (revealer-set-reveal (g/->gbool (:revealed p true)))))
+                         :apply (fn [w p changed]
+                                  (when (contains? changed :duration)
+                                    (revealer-set-transition-duration w (int (:duration p 250))))
+                                  (when (contains? changed :revealed)
+                                    (revealer-set-reveal w (g/->gbool (:revealed p true)))))}
+                        (single-child revealer-set-child))
 
    ;; -- leaves ------------------------------------------------------------
    :level        {:ctor  (fn [p]
