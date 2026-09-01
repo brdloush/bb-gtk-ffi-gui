@@ -10,11 +10,33 @@ new [FFI](https://blog.michielborkent.nl/babashka-ffi.html) instead of Jolt.
 No JVM, no build step, no bindings to generate. `bb counter` and a native
 window appears.
 
-## The pretty one
+## The pretty ones
 
-`bb monitor` -- a libadwaita dashboard reading `/proc`, live. It renders its own
-screenshot, so this picture is produced by `bb shot`, at the display's full
-pixel density:
+Two examples do the arguing. Both render their own screenshots, at the display's
+full pixel density, via `bb shot`.
+
+### Weather
+
+`bb weather` -- Open-Meteo, so there is no API key and nothing to sign up for.
+
+![Weather](docs/weather.png)
+
+The colour is the point: weather code plus day/night picks one of 14 gradients,
+and changing conditions only swaps a CSS class. Big light type, an hourly strip
+that scrolls, a 7-day list, and a details group.
+
+It **idles at 0.00% of a core**, 170 MB. It refreshes every 15 minutes, so the
+blocking main loop genuinely does nothing in between. Works offline too: the
+last response is cached, so the window opens with real content and an honest
+banner saying how old it is.
+
+`examples/weather.clj` is the UI, `examples/openmeteo.clj` the data, and
+`examples/weather_css.clj` the stylesheet -- kept apart because it is the whole
+reason the app looks designed rather than assembled.
+
+### System monitor
+
+`bb monitor` -- a libadwaita dashboard reading `/proc`, live:
 
 ![System Monitor](docs/monitor.png)
 
@@ -35,8 +57,8 @@ bindings are 279. Core did not have to change much to allow it -- see
 
 | | saves | how |
 | --- | --- | --- |
-| `GSK_RENDERER=cairo` | ~47 MB | this UI is flat lists and level bars; nothing needs a GPU, and not mapping the GL/mesa stack is free money. Output is pixel-identical. Set from inside the process in `monitor/lean!`, so it holds however you launch it. |
-| `-Xmx96m` | ~30 MB | bb is a GraalVM native image and **does** honour `-Xmx`. It has to be on the command line, so the `monitor` and `shot` tasks re-exec babashka with it -- via `babashka.process/exec`, so it stays one process. |
+| `GSK_RENDERER=cairo` | ~47 MB | these UIs are lists, type and gradients; nothing needs a GPU, and not mapping the GL/mesa stack is free money. Output is pixel-identical. Set from inside the process in `monitor/lean!` and `weather/lean!`, so it holds however you launch it. |
+| `-Xmx96m` | ~30 MB | bb is a GraalVM native image and **does** honour `-Xmx`. It has to be on the command line, so the app tasks re-exec babashka with it -- via `babashka.process/exec`, so it stays one process. |
 
 `-Xmx64m` works too and saves another 7 MB, but 96 leaves headroom; below about
 48 MB the app dies on startup. The remaining ~160 MB is mostly the babashka
@@ -67,21 +89,23 @@ binary itself (63 MB resident doing nothing) plus GTK and its theme.
 ## Run it
 
 ```bash
+bb weather    # the Open-Meteo weather app
 bb monitor    # the libadwaita system monitor
 bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
 
-bb shot       # regenerate docs/monitor.png (the app shoots itself)
-bb test       # all eleven test files (see Tests below)
+bb shot weather   # regenerate a screenshot (the app shoots itself)
+bb shot monitor
+bb test       # all thirteen test files (see Tests below)
 bb dev        # nREPL server on 1667, for editor-driven work
 
 bb tasks      # list them
 ```
 
-Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`). `bb monitor` also needs
-libadwaita (`libadwaita-1.so.0`, 1.9 here) and reads `/proc`, so it is
-Linux-only; it re-execs babashka with `-Xmx96m`, for the reason in
-[Keeping it small](#keeping-it-small).
+Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`). `bb weather` and
+`bb monitor` also need libadwaita (`libadwaita-1.so.0`, 1.9 here) and reads `/proc`, so it is
+Linux-only. `bb weather` needs the network on first run only. Both re-exec
+babashka with `-Xmx96m`, for the reason in [Keeping it small](#keeping-it-small).
 
 ## REPL workflow
 
@@ -312,7 +336,7 @@ Three small namespaces, plus two optional ones:
 | `src/gtk/ratom.clj` | 25 | reactive atom: a normal atom whose watch marks the UI dirty |
 | `src/gtk/core.clj` | 506 | hiccup -> widgets, plus a reconciler and the main loop |
 | `src/gtk/dev.clj` | 295 | dev-only: var watches, auto-refresh, file watching, screenshots |
-| `src/gtk/adw.clj` | 279 | optional: 58 libadwaita bindings, 14 tags. Core does not know it exists |
+| `src/gtk/adw.clj` | 320 | optional: libadwaita bindings and 17 tags. Core does not know it exists |
 
 ### Rendering
 
@@ -437,7 +461,10 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | `:row` | `:title` `:subtitle` | `:prefix`, else `:suffix` |
 | `:status-page` | `:title` `:description` `:icon` | -- |
 | `:toast-overlay` | -- | one child |
-| `:bin` `:scroll` | -- | one child |
+| `:bin` `:clamp` | `:clamp` takes `:max` width | one child |
+| `:scroll` | `:h` `:v` scrollbar policy: `:automatic` `:never` `:always` `:external` | one child |
+| `:banner` | `:title` `:revealed` | -- |
+| `:spinner` | -- | -- |
 | `:level` | `:value` `:min` `:max` `:width` | -- |
 | `:icon` | `:icon` `:size` | -- |
 | `:icon-button` | `:icon` | -- |
@@ -468,7 +495,7 @@ the common props below.
 | `:label` | `:label` | -- | text only |
 | `:button` | `:label` | `:on-click` | text only |
 | `:check` | `:label` `:active` | `:on-toggle` | text only |
-| `:entry` | `:value` | `:on-change` `:on-activate` | text only |
+| `:entry` | `:value` `:placeholder` | `:on-change` `:on-activate` | text only |
 
 Common props, on every widget:
 
@@ -478,7 +505,12 @@ Common props, on every widget:
 | `:sensitive` | truthy = clickable | enabled |
 | `:tooltip` | string | none |
 | `:hexpand` `:vexpand` | truthy = take spare space | `false` |
+| `:halign` `:valign` | `:fill` `:start` `:end` `:center` `:baseline` | `:fill` |
 | `:class` | a CSS class name, or a collection of them | none |
+
+A `GtkBox` child takes its **natural** size unless you set `:hexpand`/`:vexpand`.
+A scrolled window's natural height is tiny, so a `:scroll` inside a box without
+`:vexpand true` collapses to a sliver -- nothing errors, it just looks broken.
 
 Handler arguments: `:on-click` gets none, `:on-change` and `:on-activate` get the
 entry's current text, `:on-toggle` gets the new boolean.
@@ -592,6 +624,8 @@ are checking pointer identity and hiccup normalization respectively.
 | `adw_test.clj` | every Adw spec builds the GObject type it claims; each slot lands under the right parent; props reach real Adw setters and stay reactive |
 | `sysinfo_test.clj` | the `/proc` readings, formatting, and a machine with no swap |
 | `screenshot_test.clj` | a PNG really is written, at the display's scale rather than the logical size; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
+| `openmeteo_test.clj` | all 28 WMO codes map to a label, icon and sky, day and night; formatting; the view model; the staleness banner's thresholds |
+| `weather_test.clj` | config defaults, round-trip and recovery from a corrupt file; the offline path builds a whole tree from cached data and the real temperature appears on screen |
 
 ## Not done
 

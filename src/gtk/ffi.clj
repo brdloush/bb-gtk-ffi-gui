@@ -34,6 +34,8 @@
 (defcfn widget-set-margin-bottom "gtk_widget_set_margin_bottom" [:pointer :int] :void)
 (defcfn widget-set-margin-start "gtk_widget_set_margin_start" [:pointer :int] :void)
 (defcfn widget-set-margin-end "gtk_widget_set_margin_end" [:pointer :int] :void)
+(defcfn widget-set-halign "gtk_widget_set_halign" [:pointer :int] :void)
+(defcfn widget-set-valign "gtk_widget_set_valign" [:pointer :int] :void)
 (defcfn widget-add-css-class "gtk_widget_add_css_class" [:pointer :string] :void)
 (defcfn widget-remove-css-class "gtk_widget_remove_css_class" [:pointer :string] :void)
 
@@ -54,6 +56,7 @@
 
 ;; -- entry / editable -------------------------------------------------------
 (defcfn entry-new "gtk_entry_new" [] :pointer)
+(defcfn entry-set-placeholder "gtk_entry_set_placeholder_text" [:pointer :string] :void)
 (defcfn editable-get-text "gtk_editable_get_text" [:pointer] :string)
 (defcfn editable-set-text "gtk_editable_set_text" [:pointer :string] :void)
 
@@ -94,6 +97,14 @@
 ;; -- helpers ----------------------------------------------------------------
 (def HORIZONTAL 0)
 (def VERTICAL 1)
+
+(def align
+  "GtkAlign. :fill is the GTK default."
+  {:fill 0 :start 1 :end 2 :center 3 :baseline 4})
+
+(def policy
+  "GtkPolicyType, for a scrolled window's scrollbars."
+  {:always 0 :automatic 1 :never 2 :external 3})
 
 (defn ->gbool [x] (if x 1 0))
 (defn <-gbool [x] (not (zero? x)))

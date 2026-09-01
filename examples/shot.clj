@@ -1,43 +1,64 @@
 (ns shot
-  "Writes docs/monitor.png: opens the monitor, waits for two /proc samples so
-   the CPU figures are real, then has the app render a picture of itself.
+  "Writes docs/<app>.png: opens an example, waits for real data, then has the
+   app render a picture of itself.
 
-   The screenshot is taken through GSK from inside the process, because GNOME
+   The screenshot goes through GSK from inside the process, because GNOME
    refuses D-Bus screenshots from unsandboxed callers. `dev/later!` hops the
    waiting worker back onto the GTK thread, which is the only thread allowed to
    touch widgets.
 
-   `bb shot [path]`"
-  (:require [gtk.adw :as adw]
+   `bb shot [monitor|weather] [path]`"
+  (:require [babashka.fs :as fs]
+            [gtk.adw :as adw]
             [gtk.core :as ui]
             [gtk.dev :as dev]
             [monitor]
-            [gtk.ratom :as r]))
+            [weather]))
 
-(defn -main [& [path]]
-  (monitor/lean!)                       ; same renderer as `bb monitor`, so the
-                                        ; numbers in the picture are the real ones
-  (let [path (or path "docs/monitor.png")
-        stop (monitor/start-polling! monitor/state)]
-    (try
-      (ui/run (monitor/app)
+(def targets
+  {"monitor" {:path "docs/monitor.png"
               :title "System Monitor"
-              :width 760 :height 880
+              :size [760 880]
+              ;; startup includes class loading and the first paint, so the CPU
+              ;; figure would read high; wait for it to settle
+              :settle 7000
+              :start (fn [] (monitor/lean!) (monitor/start-polling! monitor/state))
+              :app   (fn [] (monitor/app))
+              :css   (fn [] monitor/css)
+              :overlay! (fn [w] (reset! monitor/overlay w))}
+   "weather" {:path "docs/weather.png"
+              :title "Weather"
+              :size [560 820]
+              ;; one HTTP round trip, then a render
+              :settle 4000
+              :start (fn [] (weather/lean!) (weather/start-polling!))
+              :app   (fn [] (weather/app))
+              :css   (fn [] weather/css)
+              :overlay! (fn [w] (reset! weather/overlay w))}})
+
+(defn -main [& [which path]]
+  (let [name (or which "monitor")
+        {:keys [size settle title] :as t}
+        (or (get targets name)
+            (throw (ex-info (str "unknown target " name) {:known (keys targets)})))
+        out  (or path (:path t))
+        stop ((:start t))]
+    (fs/create-dirs (fs/parent out))
+    (try
+      (ui/run ((:app t))
+              :title title
+              :width (first size) :height (second size)
               :window adw/window
               :on-ready
               (fn [_win tree]
-                (ui/load-css! monitor/css)
-                (reset! monitor/overlay (:widget tree))
+                (ui/load-css! ((:css t)))
+                ((:overlay! t) (:widget tree))
                 (future
-                  ;; Wait out startup before shooting. Two polls are enough for
-                  ;; the CPU figure to exist, but the first few seconds include
-                  ;; class loading and the first paint, so the number would be
-                  ;; higher than what the app actually costs once settled.
-                  (Thread/sleep 7000)
+                  (Thread/sleep settle)
                   (dev/later!
                    (fn []
-                     (let [{:keys [width height scale]} (dev/screenshot! path)]
+                     (let [{:keys [width height scale]} (dev/screenshot! out)]
                        (println (format "wrote %s  %dx%d px (scale %d)"
-                                        path width height scale)))
+                                        out width height scale)))
                      (ui/close!))))))
       (finally (stop)))))

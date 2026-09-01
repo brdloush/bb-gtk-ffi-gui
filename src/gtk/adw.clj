@@ -14,6 +14,9 @@
      :toast-overlay  AdwToastOverlay, shows toasts over its child
      :status-page    AdwStatusPage, for empty states
      :bin            AdwBin, a plain single-child holder
+     :clamp          AdwClamp, keeps content a readable width
+     :banner         AdwBanner, an inline notice strip
+     :spinner        AdwSpinner
      :scroll         GtkScrolledWindow
      :level          GtkLevelBar
      :icon           GtkImage from an icon name
@@ -86,7 +89,15 @@
 (defcfn status-set-icon-name "adw_status_page_set_icon_name" [:pointer :string] :void)
 
 ;; plain GTK4 pieces the Adw layouts need
+(defcfn clamp-new "adw_clamp_new" [] :pointer)
+(defcfn clamp-set-child "adw_clamp_set_child" [:pointer :pointer] :void)
+(defcfn clamp-set-maximum-size "adw_clamp_set_maximum_size" [:pointer :int] :void)
+(defcfn banner-new "adw_banner_new" [:string] :pointer)
+(defcfn banner-set-title "adw_banner_set_title" [:pointer :string] :void)
+(defcfn banner-set-revealed "adw_banner_set_revealed" [:pointer :int] :void)
+(defcfn spinner-new "adw_spinner_new" [] :pointer)
 (defcfn scroll-new "gtk_scrolled_window_new" [] :pointer)
+(defcfn scroll-set-policy "gtk_scrolled_window_set_policy" [:pointer :int :int] :void)
 (defcfn scroll-set-child "gtk_scrolled_window_set_child" [:pointer :pointer] :void)
 (defcfn level-new "gtk_level_bar_new" [] :pointer)
 (defcfn level-set-value "gtk_level_bar_set_value" [:pointer :double] :void)
@@ -222,9 +233,39 @@
                            (when (contains? changed :icon)
                              (status-set-icon-name w (:icon p))))}
 
-   :scroll       (merge {:ctor  (fn [_] (scroll-new))
-                         :apply (fn [_ _ _] nil)}
+   ;; :h and :v take :automatic (default), :never, :always or :external. A
+   ;; horizontal strip wants {:h :automatic :v :never}.
+   :scroll       (merge {:ctor  (fn [p]
+                                  (doto (scroll-new)
+                                    (scroll-set-policy
+                                     (get g/policy (:h p :automatic) 1)
+                                     (get g/policy (:v p :automatic) 1))))
+                         :apply (fn [w p changed]
+                                  (when (or (contains? changed :h) (contains? changed :v))
+                                    (scroll-set-policy
+                                     w
+                                     (get g/policy (:h p :automatic) 1)
+                                     (get g/policy (:v p :automatic) 1))))}
                         (single-child scroll-set-child))
+
+   :clamp        (merge {:ctor  (fn [p] (doto (clamp-new)
+                                          (clamp-set-maximum-size (int (:max p 600)))))
+                         :apply (fn [w p changed]
+                                  (when (contains? changed :max)
+                                    (clamp-set-maximum-size w (int (:max p 600)))))}
+                        (single-child clamp-set-child))
+
+   :banner       {:text-prop :title
+                  :ctor  (fn [p] (doto (banner-new (str (:title p "")))
+                                   (banner-set-revealed (g/->gbool (:revealed p true)))))
+                  :apply (fn [w p changed]
+                           (when (contains? changed :title)
+                             (banner-set-title w (str (:title p ""))))
+                           (when (contains? changed :revealed)
+                             (banner-set-revealed w (g/->gbool (:revealed p true)))))}
+
+   :spinner      {:ctor  (fn [_] (spinner-new))
+                  :apply (fn [_ _ _] nil)}
 
    ;; -- leaves ------------------------------------------------------------
    :level        {:ctor  (fn [p]

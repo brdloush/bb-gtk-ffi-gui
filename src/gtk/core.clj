@@ -99,6 +99,10 @@
       (g/widget-set-margin-bottom w m)
       (g/widget-set-margin-start w m)
       (g/widget-set-margin-end w m)))
+  (when (contains? changed :halign)
+    (g/widget-set-halign w (get g/align (get props :halign :fill) 0)))
+  (when (contains? changed :valign)
+    (g/widget-set-valign w (get g/align (get props :valign :fill) 0)))
   (when (contains? changed :class)
     (let [old (->classes (:class prev-props))
           new (->classes (:class props))]
@@ -150,8 +154,11 @@
    :entry  {:text-prop :value
             :ctor  (fn [p]
                      (doto (g/entry-new)
+                       (g/entry-set-placeholder (:placeholder p))
                        (g/editable-set-text (str (:value p "")))))
             :apply (fn [w p changed]
+                     (when (contains? changed :placeholder)
+                       (g/entry-set-placeholder w (:placeholder p)))
                      ;; only write back when it really differs, so we do not
                      ;; fight the caret while the user types
                      (when (contains? changed :value)
