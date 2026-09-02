@@ -222,7 +222,9 @@
 (defn on-gtk-thread!
   "Runs f on the GTK thread and returns its value, waiting up to ms.
    Runs inline when already there, so it cannot deadlock against itself."
-  ([f] (on-gtk-thread! f 5000))
+  ;; 20s, not 5: the wait competes with app startup and with other windows on
+  ;; a busy machine, and a timeout here fails a test that is otherwise fine.
+  ([f] (on-gtk-thread! f 20000))
   ([f ms]
    (if (on-gtk-thread?)
      (f)

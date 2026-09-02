@@ -43,7 +43,7 @@
    "babatype" {:path "docs/babatype.png"
                :title "Babatype"
                :size [1100 700]
-               :settle 900
+               :settle 2000
                ;; type a realistic run so the shot shows colour, caret and
                ;; errors rather than an untouched passage
                :start (fn []
@@ -65,12 +65,13 @@
                         (fn []))
                :app   (fn [] (babatype/app))
                :css   (fn [] babatype/css)
+               :on-render (fn [_ tree] (babatype/place-caret! tree))
                :overlay! (fn [_] nil)}
    "babatype-results"
              {:path "docs/babatype-results.png"
               :title "Babatype"
               :size [1100 700]
-              :settle 900
+              :settle 2000
               ;; a finished 30s run at a believable ~90 wpm, with the odd slip,
               ;; so the chart and the character breakdown have real numbers.
               ;; 90 wpm is 7.5 characters a second, so 133ms a keystroke.
@@ -110,6 +111,7 @@
                        (fn []))
               :app   (fn [] (babatype/app))
               :css   (fn [] babatype/css)
+              :on-render (fn [_ tree] (babatype/place-caret! tree))
               :overlay! (fn [_] nil)}
    "weather" {:path "docs/weather.png"
               :title "Weather"
@@ -134,12 +136,21 @@
               :title title
               :width (first size) :height (second size)
               :window adw/window
+              ;; some apps measure their own laid-out widgets -- babatype places
+              ;; its caret from the label's text geometry -- and that only works
+              ;; on a render *after* allocation. Without this the shot catches
+              ;; the first frame, when nothing has a size yet.
+              :on-render (or (:on-render t) (fn [_ _] nil))
               :on-ready
               (fn [_win tree]
                 (ui/load-css! ((:css t)))
                 ((:overlay! t) (:widget tree))
                 (future
                   (Thread/sleep settle)
+                  ;; force one more render now that everything is allocated,
+                  ;; then give it a moment to land before shooting
+                  (ui/refresh!)
+                  (Thread/sleep 400)
                   (dev/later!
                    (fn []
                      (let [{:keys [width height scale]} (dev/screenshot! out)]

@@ -37,7 +37,13 @@
 .hero .temp      { font-size: 84px; font-weight: 200; color: #ffffff;
                    margin: 0px; padding: 0px; }
 .hero .condition { font-size: 19px; font-weight: 500; color: #ffffff; }
-.hero .sub       { font-size: 13px; color: alpha(#ffffff, 0.72); }
+.hero .sub       { font-size: 14px; font-weight: 500;
+                   color: alpha(#ffffff, 0.88);
+                   /* slack above and below the glyphs: if anything ever
+                      squeezes the hero, GTK4 clips the child rather than
+                      overflowing, and this padding is what gets eaten
+                      instead of the tops of the letters */
+                   padding: 2px 0px; }
 .hero .place     { font-size: 13px; font-weight: 700; color: alpha(#ffffff, 0.85);
                    letter-spacing: 1px; }
 
