@@ -19,6 +19,8 @@
      :clamp          AdwClamp, keeps content a readable width
      :banner         AdwBanner, an inline notice strip
      :spinner        AdwSpinner
+     :overlay        GtkOverlay -- :slot :over floats a child on top
+     :picture        GtkPicture from a file, SVG included
      :scroll         GtkScrolledWindow
      :level          GtkLevelBar
      :icon           GtkImage from an icon name
@@ -100,6 +102,14 @@
 (defcfn carousel-set-interactive "adw_carousel_set_allow_scroll_wheel" [:pointer :int] :void)
 (defcfn carousel-set-mouse-drag "adw_carousel_set_allow_mouse_drag" [:pointer :int] :void)
 (defcfn carousel-set-indicator "adw_carousel_set_reveal_duration" [:pointer :int] :void)
+(defcfn overlay-new "gtk_overlay_new" [] :pointer)
+(defcfn overlay-set-child "gtk_overlay_set_child" [:pointer :pointer] :void)
+(defcfn overlay-add-overlay "gtk_overlay_add_overlay" [:pointer :pointer] :void)
+(defcfn overlay-remove-overlay "gtk_overlay_remove_overlay" [:pointer :pointer] :void)
+(defcfn picture-new "gtk_picture_new" [] :pointer)
+(defcfn picture-set-paintable "gtk_picture_set_paintable" [:pointer :pointer] :void)
+(defcfn picture-set-content-fit "gtk_picture_set_content_fit" [:pointer :int] :void)
+(defcfn texture-from-filename "gdk_texture_new_from_filename" [:string :pointer] :pointer)
 (defcfn revealer-new "gtk_revealer_new" [] :pointer)
 (defcfn revealer-set-child "gtk_revealer_set_child" [:pointer :pointer] :void)
 (defcfn revealer-set-reveal "gtk_revealer_set_reveal_child" [:pointer :int] :void)
@@ -122,6 +132,8 @@
 (defcfn level-set-max "gtk_level_bar_set_max_value" [:pointer :double] :void)
 (defcfn level-set-mode "gtk_level_bar_set_mode" [:pointer :int] :void)
 (defcfn image-new-from-icon "gtk_image_new_from_icon_name" [:string] :pointer)
+(defcfn image-new-from-file "gtk_image_new_from_file" [:string] :pointer)
+(defcfn image-set-from-file "gtk_image_set_from_file" [:pointer :string] :void)
 (defcfn image-set-from-icon "gtk_image_set_from_icon_name" [:pointer :string] :void)
 (defcfn image-set-pixel-size "gtk_image_set_pixel_size" [:pointer :int] :void)
 (defcfn button-new-from-icon "gtk_button_new_from_icon_name" [:string] :pointer)
@@ -146,6 +158,16 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- slot-of [props] (:slot props :content))
+
+(defn- set-picture-file!
+  "Loads `path` into a GtkPicture. Silently leaves it blank if the file is not
+   there, so a missing logo cannot stop an app starting."
+  [pic path]
+  (let [tex (when path
+              (try (let [t (texture-from-filename (str path) nil)]
+                     (when-not (g/null? t) t))
+                   (catch Throwable _ nil)))]
+    (picture-set-paintable pic (or tex ffi/null))))
 
 (defn- nth-child
   "The nth child widget of a container, by walking the sibling chain. Lets a
@@ -293,6 +315,33 @@
    :spinner      {:ctor  (fn [_] (spinner-new))
                   :apply (fn [_ _ _] nil)}
 
+   ;; One child underneath, any number floating on top. A child with
+   ;; :slot :over floats; anything else is the content. Overlaid children are
+   ;; positioned with :halign/:valign plus margins, which is how you put a
+   ;; caret at a measured pixel offset.
+   :overlay      {:ctor   (fn [_] (overlay-new))
+                  :apply  (fn [_ _ _] nil)
+                  :append (fn [parent child props]
+                            (if (= :over (slot-of props))
+                              (overlay-add-overlay parent child)
+                              (overlay-set-child parent child)))
+                  :remove (fn [parent child props]
+                            (if (= :over (slot-of props))
+                              (overlay-remove-overlay parent child)
+                              (overlay-set-child parent nil)))}
+
+   ;; An image from a file -- SVG included, because GdkTexture goes through the
+   ;; pixbuf loaders. A missing or unreadable file leaves the picture empty
+   ;; rather than raising: a logo is decoration, not a reason to fail to start.
+   :picture      {:text-prop :file
+                  :ctor  (fn [p]
+                           (doto (picture-new)
+                             (picture-set-content-fit 0)   ; CONTAIN
+                             (set-picture-file! (:file p))))
+                  :apply (fn [w p changed]
+                           (when (contains? changed :file)
+                             (set-picture-file! w (:file p))))}
+
    ;; Motion, declaratively. :page is an index; when it changes, :apply
    ;; animates there. So an animation is a side effect of a prop change and the
    ;; app stays a pure function of state.
@@ -334,23 +383,31 @@
                              (level-set-min (double (:min p 0)))
                              (level-set-max (double (:max p 1)))
                              (level-set-value (double (:value p 0)))
-                             (widget-set-valign ALIGN-CENTER)
-                             (widget-set-size-request (int (:width p 120)) -1)))
+                             (widget-set-valign ALIGN-CENTER)))
                   :apply (fn [w p changed]
                            (when (contains? changed :min)
                              (level-set-min w (double (:min p 0))))
                            (when (contains? changed :max)
                              (level-set-max w (double (:max p 1))))
                            (when (contains? changed :value)
-                             (level-set-value w (double (:value p 0))))
-                           (when (contains? changed :width)
-                             (widget-set-size-request w (int (:width p 120)) -1)))}
+                             (level-set-value w (double (:value p 0)))))}
 
+   ;; :icon takes a theme name, :file takes a path -- an SVG works either way.
+   ;;
+   ;; Use this rather than :picture whenever the size is fixed. A size request
+   ;; is a *minimum*, so a GtkPicture holding a 512px texture asks for 512px and
+   ;; gets it; GtkImage's pixel-size is an actual size, and it scales a
+   ;; high-resolution source down cleanly.
    :icon         {:text-prop :icon
-                  :ctor  (fn [p] (doto (image-new-from-icon (:icon p))
-                                   (image-set-pixel-size (int (:size p -1)))))
+                  :ctor  (fn [p]
+                           (doto (if (:file p)
+                                   (image-new-from-file (str (:file p)))
+                                   (image-new-from-icon (:icon p)))
+                             (image-set-pixel-size (int (:size p -1)))))
                   :apply (fn [w p changed]
-                           (when (contains? changed :icon)
+                           (when (contains? changed :file)
+                             (image-set-from-file w (str (:file p))))
+                           (when (and (contains? changed :icon) (not (:file p)))
                              (image-set-from-icon w (:icon p)))
                            (when (contains? changed :size)
                              (image-set-pixel-size w (int (:size p -1)))))}

@@ -145,6 +145,8 @@
     (try
       (ui/run (app)
               :title "System Monitor"
+              :app-id "cz.brdloush.BbMonitor"
+              :app-name "System Monitor"
               :width 760 :height 880
               :window adw/window
               :on-ready (fn [_win tree]

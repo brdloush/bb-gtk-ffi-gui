@@ -15,7 +15,7 @@
            :requires ([babashka.process])
            :task (babashka.process/exec "bb" "-Xmx96m" "-m" "monitor")}
 
-  shot    {:doc "Write docs/<app>.png -- the app screenshots itself. bb shot [monitor|weather|deck]"
+  shot    {:doc "Write docs/<app>.png -- the app screenshots itself. bb shot [monitor|weather|deck|babatype|babatype-results]"
            :requires ([babashka.process])
            :task (apply babashka.process/exec
                         "bb" "-Xmx96m" "-m" "shot" *command-line-args*)}
@@ -28,6 +28,21 @@
            :requires ([babashka.process])
            :task (apply babashka.process/exec
                         "bb" "-Xmx96m" "-m" "deck" *command-line-args*)}
+
+  install-desktop
+          {:doc "Install .desktop files + icons so the apps look native."
+           :requires ([desktop])
+           :task (desktop/-main "install")}
+
+  uninstall-desktop
+          {:doc "Remove what install-desktop wrote."
+           :requires ([desktop])
+           :task (desktop/-main "uninstall")}
+
+  babatype
+          {:doc "A typing test whose words are clojure.core's function names."
+           :requires ([babashka.process])
+           :task (babashka.process/exec "bb" "-Xmx96m" "-m" "babatype")}
 
   dev     {:doc "Start an nREPL server, then connect your editor and see gtk.dev."
            :task (shell "bb" "nrepl-server" "1667")}
@@ -48,6 +63,11 @@
                             "test/weather_test.clj"
                             "test/input_test.clj"
                             "test/motion_test.clj"
-                            "test/deckmd_test.clj"]]
+                            "test/deckmd_test.clj"
+                            "test/desktop_test.clj"
+                            "test/babawords_test.clj"
+                            "test/babaengine_test.clj"
+                            "test/babatype_test.clj"
+                            "test/caret_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}

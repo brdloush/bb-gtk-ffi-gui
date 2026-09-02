@@ -12,6 +12,8 @@
             [gtk.adw :as adw]
             [gtk.core :as ui]
             [gtk.dev :as dev]
+            [babaengine :as e]
+            [babatype]
             [deck]
             [monitor]
             [weather]))
@@ -37,6 +39,77 @@
                        (fn []))
               :app   (fn [] (deck/app))
               :css   (fn [] deck/css)
+              :overlay! (fn [_] nil)}
+   "babatype" {:path "docs/babatype.png"
+               :title "Babatype"
+               :size [1100 700]
+               :settle 900
+               ;; type a realistic run so the shot shows colour, caret and
+               ;; errors rather than an untouched passage
+               :start (fn []
+                        (let [t0 (- (System/currentTimeMillis) 9000)
+                              words (:words (:test @babatype/state))
+                              text (str (clojure.string/join " " (take 7 words)) " ")
+                              typed (str (subs text 0 (- (count text) 6)) "xz")]
+                          (swap! babatype/state update :test
+                                 (fn [t]
+                                   (reduce (fn [t [i c]]
+                                             ;; space carries a :char like any
+                                             ;; other printable key
+                                             (e/apply-key t
+                                                          {:key (if (= c \space) "space" (str c))
+                                                           :char c}
+                                                          (+ t0 (* i 120))))
+                                           t (map-indexed vector typed))))
+                          (swap! babatype/state assoc :best 92))
+                        (fn []))
+               :app   (fn [] (babatype/app))
+               :css   (fn [] babatype/css)
+               :overlay! (fn [_] nil)}
+   "babatype-results"
+             {:path "docs/babatype-results.png"
+              :title "Babatype"
+              :size [1100 700]
+              :settle 900
+              ;; a finished 30s run at a believable ~90 wpm, with the odd slip,
+              ;; so the chart and the character breakdown have real numbers.
+              ;; 90 wpm is 7.5 characters a second, so 133ms a keystroke.
+              :start (fn []
+                       (let [ms 133
+                             t0 (- (System/currentTimeMillis) 30200)
+                             words (:words (:test @babatype/state))
+                             ;; Fumble every seventh word by *substituting* a
+                             ;; letter, not inserting one. A substitution costs
+                             ;; one position and the rest stays aligned, which
+                             ;; is what a real typist mostly does; an insertion
+                             ;; would put everything after it out of step until
+                             ;; backspaced.
+                             text (->> (take 70 words)
+                                       (map-indexed
+                                        (fn [i w]
+                                          (if (and (zero? (mod (inc i) 7))
+                                                   (> (count w) 2))
+                                            (str (subs w 0 1) "x" (subs w 2))
+                                            w)))
+                                       (clojure.string/join " "))
+                             keep-n (int (/ 30000 ms))]
+                         (swap! babatype/state update :test
+                                (fn [t]
+                                  (-> (reduce (fn [t [i c]]
+                                                (e/apply-key
+                                                 t
+                                                 ;; space carries a :char like any
+                                                 ;; other printable key
+                                                 {:key (if (= c \space) "space" (str c))
+                                                  :char c}
+                                                 (+ t0 (* i ms))))
+                                              t
+                                              (map-indexed vector (take keep-n text)))
+                                      (e/tick (System/currentTimeMillis)))))
+                         (swap! babatype/state assoc :best 92))
+                       (fn []))
+              :app   (fn [] (babatype/app))
+              :css   (fn [] babatype/css)
               :overlay! (fn [_] nil)}
    "weather" {:path "docs/weather.png"
               :title "Weather"

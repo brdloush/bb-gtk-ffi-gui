@@ -259,6 +259,8 @@
     (try
       (ui/run (app)
               :title "Weather"
+              :app-id "cz.brdloush.BbWeather"
+              :app-name "Weather"
               :width 560 :height 820
               :window adw/window
               :on-ready (fn [_win tree]

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Babatype lockup: the babashka head with a keyboard, over the wordmark.
+     Mirrors babashka's own ba·bash·ka dot separators. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="340" viewBox="0 0 560 340">
+  <g transform="translate(216 14) scale(1.0)">
+    <!-- head -->
+    <path d="M64 7 C64 7 103 40 103 63 C103 84 86 98 64 98 C42 98 25 84 25 63 C25 40 64 7 64 7 Z"
+          fill="#dd1111"/>
+    <path d="M47 92 C43 99 38 103 31 104 C38 100 42 96 45 90 Z" fill="#b70d0d"/>
+    <path d="M81 92 C85 99 90 103 97 104 C90 100 86 96 83 90 Z" fill="#b70d0d"/>
+    <!-- sunglasses -->
+    <path d="M28 52 L100 52 C101 52 102 53 102 54 L102 68 C102 74 97 78 91 78
+             L76 78 C71 78 67 75 66 70 L64 64 L62 70 C61 75 57 78 52 78
+             L37 78 C31 78 26 74 26 68 L26 54 C26 53 27 52 28 52 Z"
+          fill="#111111"/>
+    <rect x="40" y="58" width="6" height="14" rx="1.5" fill="#ffffff"/>
+    <rect x="78" y="68" width="14" height="4" rx="1.5" fill="#ffffff"/>
+    <!-- keyboard -->
+    <rect x="20" y="104" width="88" height="20" rx="5" fill="#1d2126"/>
+    <g fill="#8b929c">
+      <rect x="25" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="35" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="45" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="55" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="65" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="75" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="85" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="95" y="108" width="7" height="4" rx="1.2"/>
+      <rect x="25" y="115" width="12" height="4" rx="1.2"/>
+      <rect x="40" y="115" width="7" height="4" rx="1.2"/>
+      <rect x="60" y="115" width="7" height="4" rx="1.2"/>
+      <rect x="70" y="115" width="7" height="4" rx="1.2"/>
+      <rect x="80" y="115" width="7" height="4" rx="1.2"/>
+      <rect x="90" y="115" width="12" height="4" rx="1.2"/>
+    </g>
+    <rect x="50" y="115" width="7" height="4" rx="1.2" fill="#e2b714"/>
+  </g>
+  <!-- wordmark -->
+  <text x="280" y="272" text-anchor="middle"
+        font-family="DejaVu Sans,Cantarell,Helvetica,Arial,sans-serif"
+        font-size="74" font-weight="bold" fill="#111111"
+        letter-spacing="-1">ba<tspan fill="#dd1111">·</tspan>ba<tspan fill="#dd1111">·</tspan>type</text>
+  <text x="280" y="304" text-anchor="middle"
+        font-family="DejaVu Sans Mono,monospace" font-size="17" fill="#8b929c"
+        letter-spacing="3">clojure.core, one key at a time</text>
+</svg>

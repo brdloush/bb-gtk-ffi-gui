@@ -168,6 +168,8 @@
       (try
         (ui/run (app)
                 :title "Deck"
+                :app-id "cz.brdloush.BbDeck"
+                :app-name "Deck"
                 :width 900 :height 620
                 :window adw/window
                 :on-ready (fn [_win _tree] (ui/load-css! css)))

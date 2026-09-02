@@ -32,6 +32,14 @@
 (println "   controller type:" (type-name ctrl))
 (assert (= "GtkEventControllerKey" (type-name ctrl)))
 (println "   attached to:" (type-name (:host (last @ui/controllers))))
+;; CAPTURE, not the default BUBBLE. In the bubble phase the focused widget sees
+;; the key first, so a focused button swallows space and activates itself --
+;; which in a typing test silently restarts the whole run.
+(defcfn ctrl-phase "gtk_event_controller_get_propagation_phase" [:pointer] :int)
+(println "   propagation phase:" (dev/on-gtk-thread! #(ctrl-phase ctrl))
+         "(1 = capture)")
+(assert (= (:capture g/phase) (dev/on-gtk-thread! #(ctrl-phase ctrl)))
+        "a bubble-phase key controller loses space to whatever has focus")
 (assert (= "AdwWindow" (type-name (:host (last @ui/controllers))))
         ":on-key must land on the toplevel, not on a widget that never focuses")
 
@@ -51,6 +59,23 @@
 (println "2) keys seen:" (mapv :key @seen))
 (assert (= ["Right" "Left" "space" "Escape" "F5" "a"] (mapv :key @seen))
         "handler should get names from gdk_keyval_name, not keyvals")
+
+;; --- 2b. printable keys also arrive as :char ---------------------------
+;; And the ones that are not printable must NOT: Escape, Tab and BackSpace map
+;; to unicode 27, 9 and 8, so a (pos? uni) test would type an Escape.
+(reset! seen [])
+(doseq [c "az-?>!*1./=' "] (press! (@#'gtk.ffi/unicode-to-keyval (int c))))
+(println "2b) chars:" (pr-str (apply str (map :char @seen))))
+(assert (= "az-?>!*1./=' " (apply str (map :char @seen)))
+        "printable keys did not round-trip into :char")
+
+(reset! seen [])
+(press! ESC) (press! 0xff09) (press! 0xff08) (press! RIGHT)
+(println "    control keys ->" (mapv (juxt :key :char) @seen))
+(assert (every? #(nil? (:char %)) @seen)
+        "a control key leaked into :char -- Escape would be typed")
+(assert (= ["Escape" "Tab" "BackSpace" "Right"] (mapv :key @seen))
+        "names should still come through")
 
 ;; --- 3. modifiers ------------------------------------------------------
 (reset! seen [])

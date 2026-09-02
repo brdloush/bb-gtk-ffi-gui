@@ -105,6 +105,31 @@
 (assert (= {:title "quick"} (:props (normalize [:row "quick"]))))
 (assert (= {:icon "x-symbolic"} (:props (normalize [:icon-button "x-symbolic"]))))
 
+;; --- 4b. :icon from a file, and :picture ---------------------------------
+;; A fixed-size logo wants :icon with :size, not :picture: a size request is a
+;; minimum, so a picture holding a 512px texture asks for 512px and gets it.
+(defcfn image-get-pixel-size "gtk_image_get_pixel_size" [:pointer] :int)
+(def img (reconcile root-spec win nil
+                    (normalize [:icon {:file "icons/cz.brdloush.Babatype.svg"
+                                       :size 38}])))
+(println "4b) :icon from a file ->" (type-name (:widget img))
+         "pixel-size" (image-get-pixel-size (:widget img)))
+(assert (= "GtkImage" (type-name (:widget img))))
+(assert (= 38 (image-get-pixel-size (:widget img))))
+
+;; a missing file must leave it blank rather than raise: a logo is decoration
+(println "    a missing file is survivable:"
+         (try (some? (reconcile root-spec win nil
+                                (normalize [:icon {:file "icons/nope.svg" :size 20}])))
+              (catch Exception e (str "RAISED " (ex-message e)))))
+(assert (true? (try (some? (reconcile root-spec win nil
+                                      (normalize [:icon {:file "icons/nope.svg"}])))
+                    (catch Exception _ false))))
+(def pic (reconcile root-spec win nil
+                    (normalize [:picture {:file "icons/cz.brdloush.Babatype.svg"}])))
+(assert (= "GtkPicture" (type-name (:widget pic))))
+(println "    :picture also loads an SVG:" (type-name (:widget pic)))
+
 ;; --- 5. toast! does not blow up ----------------------------------------
 (adw/toast! overlay "hello from a test")
 (println "5) toast shown ok")

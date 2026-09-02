@@ -62,6 +62,15 @@
    :on-activate {:signal "activate"
                  :invoke (fn [f w _args] (f (g/editable-get-text w)))}
 
+   ;; Fires when a widget is given its width -- including the first time, which
+   ;; is the only moment anything measured from a laid-out widget becomes
+   ;; available. A render alone is too early: the tree exists but nothing has
+   ;; been allocated yet.
+   :on-resize {:signal "notify::width"
+               :argtypes [:pointer :pointer :pointer]
+               :rettype :void
+               :invoke (fn [f _w _args] (f))}
+
    ;; Keys are not a signal on a widget: you make a controller, connect to it,
    ;; and add it to a widget. Added to the toplevel, because a controller on a
    ;; widget that never takes focus would never see anything.
@@ -72,7 +81,11 @@
                :rettype :int
                :invoke (fn [f _w [_ctrl keyval _keycode state _data]]
                          (when-let [name (g/keyval-name keyval)]
-                           (f (assoc (g/modifiers state) :key name))))}}))
+                           (f (assoc (g/modifiers state)
+                                     :key name
+                                     ;; nil unless the key actually types
+                                     ;; something printable
+                                     :char (g/keyval-char keyval)))))}}))
 
 (defonce ^{:doc "Controllers created for :on-key and friends, newest last.
   Kept so tests and a REPL can reach them; nothing in rendering reads this."}
@@ -109,6 +122,10 @@
       ;; :window because key events go to the toplevel; a controller on a
       ;; widget that never takes focus would never fire
       (let [host (if (= :window attach) (:window @current) widget)]
+        ;; Capture, not the default bubble. In the bubble phase the focused
+        ;; widget sees the key first, so a focused button would swallow space
+        ;; and activate itself -- which in a typing test restarts the whole run.
+        (g/event-controller-set-phase target (:capture g/phase))
         (g/widget-add-controller host target)
         (swap! controllers conj {:prop prop :controller target :host host})))
     target))
@@ -146,6 +163,24 @@
       (g/widget-set-margin-bottom w m)
       (g/widget-set-margin-start w m)
       (g/widget-set-margin-end w m)))
+  ;; a size *request* is a minimum, not a fixed size: -1 means "whatever you
+  ;; need". Enough to build a bar chart out of plain boxes.
+  (when (or (contains? changed :width) (contains? changed :height))
+    (g/widget-set-size-request w (int (get props :width -1)) (int (get props :height -1))))
+  ;; individual margins win over the uniform one, so :margin can set a base and
+  ;; :margin-start override it
+  (when (contains? changed :margin-start)
+    (g/widget-set-margin-start w (int (get props :margin-start 0))))
+  (when (contains? changed :margin-end)
+    (g/widget-set-margin-end w (int (get props :margin-end 0))))
+  (when (contains? changed :margin-top)
+    (g/widget-set-margin-top w (int (get props :margin-top 0))))
+  (when (contains? changed :margin-bottom)
+    (g/widget-set-margin-bottom w (int (get props :margin-bottom 0))))
+  ;; :focusable false keeps a widget out of the Tab chain, so it can never
+  ;; steal a keystroke meant for the app
+  (when (contains? changed :focusable)
+    (g/widget-set-focusable w (g/->gbool (get props :focusable true))))
   (when (contains? changed :halign)
     (g/widget-set-halign w (get g/align (get props :halign :fill) 0)))
   (when (contains? changed :valign)
@@ -505,7 +540,16 @@
    drives the GTK main loop until the window is closed.
 
    `:on-ready` is called once as (f window root-node), after gtk_init and the
-   first render but before the window is presented.
+   first render but before the window is presented. `:on-render` is called after
+   *every* render, for work that needs the widgets to already carry this frame's
+   properties -- measuring laid-out text, for instance. It runs on the GTK
+   thread inside the render, so it must not be slow and must not dirty the tree.
+
+   `:app-id` sets the Wayland app_id, in reverse-DNS form by convention. It is
+   what makes the desktop treat this as its own application rather than as
+   plain `bb`, and it is the key a compositor uses to find a .desktop file --
+   which is the only way to get an icon in GNOME's switcher. `:app-name` is the
+   human-readable name shown beside it.
 
    Blocks. At the REPL, start it on its own thread so the prompt stays free:
 
@@ -513,9 +557,15 @@
 
    Every GTK call then happens on that thread, which is what GTK requires.
    `refresh!` and `swap!` from the REPL only set a flag, so they are safe."
-  [component & {:keys [title width height window on-ready]
+  [component & {:keys [title width height window on-ready on-render
+                       app-id app-name]
                 :or   {title "babashka + gtk4" width 360 height 200
                        window default-window}}]
+  ;; Identity first: GTK derives the Wayland app_id from prgname when it creates
+  ;; the surface, and a compositor matches that against a .desktop file. Setting
+  ;; it later has no effect.
+  (when app-id (g/set-prgname app-id))
+  (when app-name (g/set-application-name app-name))
   (g/gtk-init)
   (let [root      (root-spec window)
         win       ((:ctor window))
@@ -531,7 +581,10 @@
                     (let [vtree (normalize (component))]
                       (vreset! tree (reconcile root win @tree vtree))
                       (reset! last-error nil)
-                      (swap! current assoc :tree @tree :error nil))
+                      (swap! current assoc :tree @tree :error nil)
+                      ;; after the widgets exist and carry this frame's props,
+                      ;; so a caller can measure them -- text geometry, say
+                      (when on-render (on-render win @tree)))
                     (catch Throwable t
                       ;; keep the old tree and keep pumping GTK, so the window
                       ;; stays alive and the next good render recovers it

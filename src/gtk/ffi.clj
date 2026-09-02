@@ -13,11 +13,37 @@
 (defcfn idle-add "g_idle_add" [:pointer :pointer] :int)
 (defcfn main-context-wakeup "g_main_context_wakeup" [:pointer] :void)
 
+;; -- process identity ------------------------------------------------------
+;; prgname becomes the Wayland app_id, which is what a compositor matches
+;; against a .desktop file. Must be set before the first window is created.
+(defcfn set-prgname "g_set_prgname" [:string] :void)
+(defcfn get-prgname "g_get_prgname" [] :string)
+(defcfn set-application-name "g_set_application_name" [:string] :void)
+(defcfn get-application-name "g_get_application_name" [] :string)
+
 ;; -- input (event controllers) ----------------------------------------------
 (defcfn event-controller-key-new "gtk_event_controller_key_new" [] :pointer)
 (defcfn widget-add-controller "gtk_widget_add_controller" [:pointer :pointer] :void)
+(defcfn event-controller-set-phase "gtk_event_controller_set_propagation_phase" [:pointer :int] :void)
+
+(def phase
+  "GtkPropagationPhase. Controllers default to :bubble, which means the focused
+   widget sees the event first -- so a focused button would swallow space."
+  {:none 0 :capture 1 :bubble 2 :target 3})
 (defcfn keyval-name "gdk_keyval_name" [:int] :string)
 (defcfn keyval-to-unicode "gdk_keyval_to_unicode" [:int] :int)
+(defcfn unicode-to-keyval "gdk_unicode_to_keyval" [:int] :int)
+
+(defn keyval-char
+  "The character a keyval types, or nil when it types nothing.
+
+   Note the lower bound: Escape, Tab and BackSpace map to unicode 27, 9 and 8 --
+   real control characters, not zero. Testing `(pos? uni)` would type an Escape
+   into your document."
+  [keyval]
+  (let [uni (keyval-to-unicode keyval)]
+    (when (and (>= uni 32) (not= uni 127))
+      (char uni))))
 
 (def modifier
   "GdkModifierType bits we care about."
@@ -58,6 +84,8 @@
 (defcfn widget-set-margin-bottom "gtk_widget_set_margin_bottom" [:pointer :int] :void)
 (defcfn widget-set-margin-start "gtk_widget_set_margin_start" [:pointer :int] :void)
 (defcfn widget-set-margin-end "gtk_widget_set_margin_end" [:pointer :int] :void)
+(defcfn widget-set-size-request "gtk_widget_set_size_request" [:pointer :int :int] :void)
+(defcfn widget-set-focusable "gtk_widget_set_focusable" [:pointer :int] :void)
 (defcfn widget-set-halign "gtk_widget_set_halign" [:pointer :int] :void)
 (defcfn widget-set-valign "gtk_widget_set_valign" [:pointer :int] :void)
 (defcfn widget-add-css-class "gtk_widget_add_css_class" [:pointer :string] :void)
@@ -76,6 +104,13 @@
 (defcfn label-set-markup "gtk_label_set_markup" [:pointer :string] :void)
 (defcfn label-set-wrap "gtk_label_set_wrap" [:pointer :int] :void)
 (defcfn label-set-xalign "gtk_label_set_xalign" [:pointer :float] :void)
+(defcfn label-get-layout "gtk_label_get_layout" [:pointer] :pointer)
+(defcfn label-get-layout-offsets "gtk_label_get_layout_offsets" [:pointer :pointer :pointer] :void)
+(defcfn pango-index-to-pos "pango_layout_index_to_pos" [:pointer :int :pointer] :void)
+
+(def PANGO-SCALE
+  "Pango works in 1024ths of a pixel."
+  1024)
 
 ;; -- button -----------------------------------------------------------------
 (defcfn button-new-with-label "gtk_button_new_with_label" [:string] :pointer)

@@ -92,5 +92,20 @@
 (assert (= "yes" (g/getenv "GTK_FFI_PROBE")))
 (assert (nil? (g/getenv "GTK_FFI_PROBE_UNSET")))
 
+;; --- 8. :app-id / :app-name reach GLib before the window exists ---------
+;; prgname becomes the Wayland app_id, which is the key a compositor matches
+;; against a .desktop file. Set after the surface exists and it does nothing.
+(def before-id (g/get-prgname))
+(def th2 (future (ui/run (fn [] [:vbox {} [:label "identity"]])
+                         :title "identity"
+                         :app-id "cz.example.IdentityTest"
+                         :app-name "Identity Test")))
+(Thread/sleep 700)
+(println "8) prgname:" (pr-str before-id) "->" (pr-str (g/get-prgname)))
+(assert (= "cz.example.IdentityTest" (g/get-prgname)) ":app-id did not reach prgname")
+(assert (= "Identity Test" (g/get-application-name)) ":app-name did not reach GLib")
+(ui/close!)
+(assert (nil? (deref th2 3000 :TIMEOUT)))
+
 (println "ALL OK")
 (System/exit 0)

@@ -12,8 +12,95 @@ window appears.
 
 ## The pretty ones
 
-Three examples do the arguing. Each renders its own screenshot, at the display's
+Four examples do the arguing. Each renders its own screenshot, at the display's
 full pixel density, via `bb shot`.
+
+### Babatype
+
+`bb babatype` -- a typing test in the shape of Monkeytype, whose words are the
+names of **`clojure.core`'s public vars, read out of the running interpreter at
+boot**. No word list ships with it: the app types the language it is written in.
+
+![Babatype](docs/babatype.png)
+
+![Babatype results](docs/babatype-results.png)
+
+Difficulty falls out of the names themselves -- `core` is the plain ones,
+`symbols` adds `->>` `some?` `swap!` `*ns*`, and `everything` adds the monsters
+up to `set-agent-send-off-executor!`.
+
+The passage is **one `GtkLabel`**. Per-character colour, the caret and the error
+underlines are all Pango markup, rebuilt on each keystroke -- about **0.17 ms**
+for a full passage. A widget per character, which is the direct translation of
+what Monkeytype does in the browser, would churn hundreds of widgets a second
+and walk straight into the two gaps under [Not done](#not-done).
+
+It **starts fullscreen** -- nothing else on the screen is useful while you are
+typing -- and `F11` puts it back in a window. `tab` restarts, `esc` leaves.
+
+**The caret is a 3px bar between characters**, not a block over one -- a
+floated widget in a `GtkOverlay`, moved into place by asking the label's Pango
+layout where the next character starts. A background span could only ever cover
+a whole character cell, and inserting a bar into the text would shift everything
+after it.
+
+Nothing measured from a laid-out widget is available during the first render:
+it has no size yet. Neither `notify::width` nor a frame-clock callback fires
+late enough -- both still report a height of zero -- so the idle loop keeps
+ticking slowly, and the render after allocation is what places the caret. That
+costs a render every 400ms while nobody is typing, which is about 0.05% of a
+core.
+
+**Ligatures are off.** A font like JetBrains Mono renders `->` as a single
+arrow glyph and `<=` as `≤`, which for a typing test is actively wrong: two
+characters become one cell, so the caret and the per-character colours land in
+the wrong place, and `<=` is hard to aim at.
+
+Only Pango's own attribute turns them off:
+
+```clojure
+"<span font_features='liga=0,calt=0,dlig=0,clig=0'>...</span>"
+```
+
+Wrapping each character in its own `<span>` does **not** stop them, and GTK's
+CSS `font-feature-settings` silently does nothing at all. Both were tried and
+screenshotted before settling on the attribute.
+
+**The line breaks are ours, not Pango's.** Wrapping is turned off and the
+passage is split into fixed 52-character lines at word boundaries, three of them
+on screen at a time. The target itself is unaffected -- just the
+words joined by spaces -- and a line swallows the space that follows it, so the
+caret has somewhere visible to sit at a break. Letting Pango wrap looked fine standing still and was
+wrong in motion: it re-flows whenever the text changes, so the paragraph slid
+sideways under a stationary caret instead of scrolling a line at a time. It also
+cheerfully broke `keep-indexed` across two lines, which for a Clojure name is
+nonsense. Fixed spans give a layout that does not move, and `babaengine`
+computes them, so the behaviour is tested rather than eyeballed.
+
+The results chart is built from plain boxes whose height is a size request, with
+a red cross over any second that contained a mistake -- the same idea as the
+reference's error axis. No drawing API, because we still do not have one.
+
+Mistakes are counted from the keystroke log, so backspacing does not un-make
+one: the wrong key was still pressed. `ERRORS` is the total; the crosses say
+when, and each carries a tooltip with the count for that second.
+
+**Space is just another character.** The target is one flat string, gaps
+included, and every keystroke is scored against the character under the cursor.
+Typing a space where a letter belongs is a mistyped character; typing a letter
+where the gap between two words belongs is equally a mistake. Nothing about the
+space bar commits a word or skips ahead.
+
+That falls out well: a *substitution* costs one position and the rest of the
+passage stays aligned, so one typo does not poison everything after it. The
+honest trade is that an *insertion* -- an extra character nobody asked for --
+does put you out of step until you backspace, where Monkeytype's word-by-word
+model would absorb it. In exchange there is no way to overrun a word, so nothing
+can shove the passage sideways as you type.
+
+`examples/babaengine.clj` is the whole test as a pure state machine and
+`examples/babawords.clj` the word list; both are covered without opening a
+window.
 
 ### Deck
 
@@ -134,6 +221,7 @@ the environment and measure your own animation cost first.
 ## Run it
 
 ```bash
+bb babatype   # the typing test on clojure.core
 bb deck examples/talk.md   # the markdown presenter
 bb weather    # the Open-Meteo weather app
 bb monitor    # the libadwaita system monitor
@@ -143,8 +231,12 @@ bb todo       # dynamic list, entry, check buttons
 bb shot weather   # regenerate a screenshot (the app shoots itself)
 bb shot monitor
 bb shot deck
-bb test       # all sixteen test files (see Tests below)
+bb shot babatype
+bb test       # all twenty-one test files (see Tests below)
 bb dev        # nREPL server on 1667, for editor-driven work
+
+bb install-desktop     # make the apps look native in the switcher and app grid
+bb uninstall-desktop   # and undo it
 
 bb tasks      # list them
 ```
@@ -153,6 +245,74 @@ Needs babashka >= 1.13.220 and GTK4 (`libgtk-4.so.1`). `bb weather` and
 `bb monitor` also need libadwaita (`libadwaita-1.so.0`, 1.9 here) and reads `/proc`, so it is
 Linux-only. `bb weather` needs the network on first run only. Both re-exec
 babashka with `-Xmx96m`, for the reason in [Keeping it small](#keeping-it-small).
+
+## Desktop integration
+
+Out of the box every one of these windows is, as far as the desktop is
+concerned, a program called **`bb`**: same generic icon, same name. Two separate
+things are wrong there, and only one of them can be fixed at runtime.
+
+### The name: runtime, no files
+
+`run` takes `:app-id` and `:app-name`:
+
+```clojure
+(ui/run (app)
+        :app-id "cz.brdloush.BbWeather"     ; becomes the Wayland app_id
+        :app-name "Weather")
+```
+
+These have to be set before the first window exists, because GTK derives the
+app_id from the process name when it creates the surface. `run` does it before
+`gtk_init` for that reason -- setting it afterwards silently does nothing.
+
+### The icon: needs a .desktop file
+
+Wayland has no per-window icon message, so a compositor takes the app_id and
+goes looking for a matching `.desktop` file. GTK 4.16 added support for the
+newer `xdg-toplevel-icon` protocol, and on GTK 4.22 with GNOME Shell 50 it still
+does not help: **GNOME's switcher is app-centric.** It shows the icon of the
+application it matched the window to and ignores what the window asks for.
+
+Tested in both directions on the same app_id and the same icon name:
+
+| | switcher icon |
+| --- | --- |
+| `gtk_window_set_icon_name` only | generic |
+| plus a matching `.desktop` file | the real icon |
+| file removed again | generic |
+
+So `gtk_window_set_icon_name` is not worth calling on GNOME. The file is the
+mechanism.
+
+```bash
+bb install-desktop      # one .desktop file + one icon per app, in ~/.local/share
+bb uninstall-desktop    # removes exactly what it wrote, nothing else
+```
+
+If an icon does not appear straight away, GNOME has not rescanned the
+applications directory yet. It picks new entries up on its own, but not always
+instantly -- and an app added to the list after a previous install needs
+`bb install-desktop` run again.
+
+Two details that matter:
+
+- **`Path=`** is set to the project root, so a dock launch works from any
+  working directory. Without it `bb weather` cannot find the tasks.
+- **The icon name equals the app_id**, so the `.desktop` file, the SVG and the
+  live window all agree on one string.
+
+### The icons are ours
+
+The theme turns out to be thin here. `x-office-presentation` exists, but there
+is no full-colour system-monitor or weather icon at all -- only symbolic glyphs,
+which look flat as an app icon. So `icons/` holds hand-written SVGs, one per
+app. Change them and re-run `bb install-desktop`.
+
+Babatype gets a proper mark: babashka's red head and black sunglasses, but the
+lenses read as a text caret and an underscore, and it wears a keyboard.
+
+![Babatype logo](docs/babatype-logo.png)
 
 ## REPL workflow
 
@@ -266,6 +426,15 @@ Calling a widget function from the wrong thread does not raise -- it segfaults.
   CRITICALs.
 - `(ui/run view ...)` captures the fn value. Pass `#'view` if you intend to
   redefine it and have the running window notice.
+- **A size request is a minimum, not a size.** `:width`/`:height` set a floor.
+  For a fixed-size image use `:icon` with `:size` (a real pixel size); a
+  `:picture` holding a 512px texture asks for 512px and gets it.
+- **`GdkTexture` rasterises an SVG at its intrinsic `width`/`height`**, not at
+  the size you draw it. A 128px raster scaled down to a 38pt logo looks soft, so
+  set the intrinsic size large and keep the `viewBox` small.
+- **Keep `<svg>` near the top of the file.** GdkPixbuf sniffs the first bytes to
+  choose a loader, so a long header comment before the element gets the whole
+  file rejected as "Unrecognized image file format".
 
 `test/repl_reload_test.clj` drives this whole loop end to end -- redefines a view,
 calls `refresh!`, then reads the text back out of the real `GtkLabel`:
@@ -492,7 +661,9 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | --- | --- |
 | `widgets` / `signals` are atoms | `register-widget!` and `register-signal!` add tags and events from another namespace |
 | signals carry `:argtypes` / `:rettype` | not every signal is `(instance, data) -> void`. A key handler is five arguments and returns whether it consumed the event |
-| signals carry `:controller` / `:attach` | input arrives through a `GtkEventController`, which you connect to and then add to a widget -- `:attach :window` puts it on the toplevel |
+| signals carry `:controller` / `:attach` | input arrives through a `GtkEventController`, which you connect to and then add to a widget -- `:attach :window` puts it on the toplevel, in the **capture** phase so a focused widget cannot swallow the key first |
+| `run` takes `:on-render` | called after *every* render, once the widgets carry this frame's props -- for work that has to measure laid-out text |
+| `run` takes `:app-id` / `:app-name` | the process identity a compositor matches against a `.desktop` file -- set before `gtk_init`, because afterwards it does nothing |
 | specs carry `:after-children` | for a container whose props refer to its children. A carousel's initial `:page` is ignored otherwise, because `:apply` runs before the children exist |
 | `:append` / `:remove` get the child's props | lets a container read a `:slot` prop and put the child somewhere specific |
 | `run`'s `:window` option | `{:ctor f :set-content f}`. `AdwWindow` has no titlebar of its own, which is what makes an Adw header bar sit flush |
@@ -521,10 +692,12 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | `:scroll` | `:h` `:v` scrollbar policy: `:automatic` `:never` `:always` `:external` | one child |
 | `:banner` | `:title` `:revealed` | -- |
 | `:spinner` | -- | -- |
+| `:overlay` | -- | one child, plus any number with `:slot :over` floating on top |
 | `:carousel` | `:page` (an index -- changing it **animates**), `:animate`, `:drag`, `:wheel` | pages |
 | `:revealer` | `:revealed` `:duration` | one child |
 | `:level` | `:value` `:min` `:max` `:width` | -- |
-| `:icon` | `:icon` `:size` | -- |
+| `:icon` | `:icon` (theme name) or `:file` (a path, SVG included), `:size` | -- |
+| `:picture` | `:file` | -- |
 | `:icon-button` | `:icon` | -- |
 | `:adw-window` | -- | one child |
 
@@ -564,6 +737,9 @@ Common props, on every widget:
 | `:tooltip` | string | none |
 | `:hexpand` `:vexpand` | truthy = take spare space | `false` |
 | `:halign` `:valign` | `:fill` `:start` `:end` `:center` `:baseline` | `:fill` |
+| `:width` `:height` | a size *request*, i.e. a minimum. Enough to build a bar chart out of boxes | `-1` (natural) |
+| `:margin-start` `:margin-end` `:margin-top` `:margin-bottom` | individual margins, which win over `:margin`. How you place a widget at a measured pixel offset inside an `:overlay` | `0` |
+| `:focusable` | `false` keeps a widget out of the Tab chain, so it cannot steal a keystroke | `true` |
 | `:class` | a CSS class name, or a collection of them | none |
 
 `:markup` is Pango markup and wins over `:label`. Whatever builds it **must
@@ -579,8 +755,14 @@ entry's current text, `:on-toggle` gets the new boolean.
 
 ### Keys
 
-`:on-key` works on any widget, but always listens at the **toplevel** -- a
-controller on a widget that never takes focus would never fire. The handler gets
+`:on-key` works on any widget, but always listens at the **toplevel**, in the
+**capture** phase.
+
+Both details are load-bearing. A controller on a widget that never takes focus
+would never fire; and in the default *bubble* phase the focused widget sees the
+key first -- so a focused button swallows the space bar and activates itself,
+which in a typing test silently restarts the run. Buttons that sit next to a
+keyboard-driven surface are also worth marking `:focusable false`. The handler gets
 a map, and returning truthy stops the key going any further:
 
 ```clojure
@@ -593,7 +775,12 @@ a map, and returning truthy stops the key going any further:
 ```
 
 The key is a **name**, from `gdk_keyval_name`: `"Right"`, `"space"`, `"Escape"`,
-`"Page_Down"`, `"F5"`, `"a"`. No table to maintain.
+`"Page_Down"`, `"F5"`, `"a"`. No table to maintain. `:char` carries the typed
+character for keys that produce one, and is `nil` otherwise.
+
+That `nil` matters: Escape, Tab and BackSpace map to unicode **27, 9 and 8** --
+real control characters, not zero. A `(pos? uni)` test would type an Escape into
+your document, so `gtk.ffi/keyval-char` requires `>= 32`.
 
 Keys are not an ordinary signal: they arrive through a `GtkEventController`,
 with a different callback signature and a return value. That is why entries in
@@ -642,7 +829,7 @@ child-props])`. The child's props are passed so a container can honour a
 
 | | |
 | --- | --- |
-| `(run component & opts)` | Opens a window and drives the main loop. Blocks. Opts: `:title` (`"babashka + gtk4"`), `:width` (360), `:height` (200), `:window` (`default-window`), `:on-ready` (`(f window root-node)`, once). `component` is a fn of no args returning hiccup. |
+| `(run component & opts)` | Opens a window and drives the main loop. Blocks. Opts: `:title` (`"babashka + gtk4"`), `:width` (360), `:height` (200), `:window` (`default-window`), `:on-ready` (`(f window root-node)`, once), `:app-id`, `:app-name` (see [Desktop integration](#desktop-integration)). `component` is a fn of no args returning hiccup. |
 | `(refresh!)` | Re-render on the next loop turn. For code changes; state changes do it themselves. |
 | `(close!)` | Close the window and let `run` return. Safe from any thread. |
 | `current` | Atom, while a window is up: `{:window ptr :tree node :thread id :stop! f :error e}`. nil otherwise. |
@@ -714,6 +901,11 @@ are checking pointer identity and hiccup normalization respectively.
 | `input_test.clj` | keys arrive as names with modifiers; the return value decides whether the event stops; a throwing handler is contained and reports "not handled"; ordinary signals still work |
 | `motion_test.clj` | changing `:page` really animates rather than jumping, `:animate false` jumps, an unrelated re-render does not re-animate, and `nth-child` stops at the end of the sibling chain |
 | `deckmd_test.clj` | markdown to slides, Pango escaping (including an injection attempt), and every key-to-action transition |
+| `caret_test.clj` | the caret is a few pixels wide, not a character cell, and sits exactly where Pango says the next character starts -- from the first screen, and after typing |
+| `babatype_test.clj` | the passage markup: ligatures disabled, per-character colouring, a mistyped space showing the intruding character, exactly one caret at every cursor position, and markup escaping |
+| `babaengine_test.clj` | the typing engine: the clock starts on the first keystroke and freezes when the test ends, backspace reopens a wrong word but not a right one, a leading space is ignored, and every metric including the empty case that would otherwise be NaN |
+| `babawords_test.clj` | the word list against the live `clojure.core`: plumbing filtered out, the three sources nest, sampling is deterministic per seed and never repeats a word back to back |
+| `desktop_test.clj` | the `.desktop` entry has every key a compositor needs, install/uninstall/re-install are exact and reversible, and a missing `icons/` fails loudly rather than writing half an install. Writes into a temp `XDG_DATA_HOME`, never the real one |
 
 ## Not done
 
