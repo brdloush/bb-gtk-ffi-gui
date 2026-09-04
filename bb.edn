@@ -68,6 +68,7 @@
                             "test/babawords_test.clj"
                             "test/babaengine_test.clj"
                             "test/babatype_test.clj"
-                            "test/caret_test.clj"]]
+                            "test/caret_test.clj"
+                            "test/inspector_test.clj"]]
                    (println (str "\n== " f))
                    (shell "bb" f))}}}

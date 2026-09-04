@@ -37,6 +37,11 @@ and walk straight into the two gaps under [Not done](#not-done).
 
 It **starts fullscreen** -- nothing else on the screen is useful while you are
 typing -- and `F11` puts it back in a window. `tab` restarts, `esc` leaves.
+`F3` opens the GTK inspector, whose *Frames* page shows the real frame rate;
+`gtk_window_set_interactive_debugging` needs no `GTK_DEBUG=interactive` and no
+keybinding setting, and toggling it off only hides the window, so its frame
+history survives. It keeps a frame clock running while it is open, so the idle
+cost below is not what you will measure through it.
 
 **The caret is a 3px bar between characters**, not a block over one -- a
 floated widget in a `GtkOverlay`, moved into place by asking the label's Pango

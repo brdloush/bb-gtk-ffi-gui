@@ -177,6 +177,14 @@
 
 (defn raw-wpm [s now] (/ (/ (typed-chars s) 5.0) (minutes s now)))
 
+(defn cpm
+  "Net characters per minute: correctly typed characters per minute. Five times
+   `wpm`, since a \"word\" is five characters by definition."
+  [s now]
+  (/ (correct-chars s) (minutes s now)))
+
+(defn raw-cpm [s now] (/ (typed-chars s) (minutes s now)))
+
 (defn accuracy
   "Correct keystrokes over all keystrokes. 1.0 before anything is typed."
   [{:keys [keys]}]
@@ -262,6 +270,8 @@
   [s now]
   {:wpm         (wpm s now)
    :raw-wpm     (raw-wpm s now)
+   :cpm         (cpm s now)
+   :raw-cpm     (raw-cpm s now)
    :accuracy    (accuracy s)
    :consistency (consistency s now)
    :seconds     (/ (elapsed-ms s now) 1000.0)

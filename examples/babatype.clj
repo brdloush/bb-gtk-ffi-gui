@@ -80,14 +80,28 @@
       (g/window-unfullscreen win)
       (g/window-fullscreen win))))
 
+(defonce ^:private inspector? (volatile! false))
+
+(defn- toggle-inspector!
+  "Opens the GTK inspector -- the window GTK_DEBUG=interactive would give you.
+   Its \"Frames\" page draws the live frame rate and frame times, which is a real
+   measurement of what the renderer is doing rather than a number this app
+   guesses about itself.
+
+   The inspector keeps its own frame clock running while it is open, so the
+   idle cost of the app is not what it normally is while you are watching."
+  []
+  (g/window-set-interactive-debugging (if (vswap! inspector? not) 1 0)))
+
 (defn on-key
   "Everything is typing except Tab, which restarts, F11 which toggles
-   fullscreen, and Escape, which leaves. Returns truthy for keys we consumed so
-   the rest fall through to GTK."
+   fullscreen, F3 which opens the GTK inspector, and Escape, which leaves.
+   Returns truthy for keys we consumed so the rest fall through to GTK."
   [{:keys [key char ctrl?] :as k}]
   (cond
     (= "Tab" key)    (do (restart!) true)
     (or (= "F11" key) (= "F5" key)) (do (toggle-fullscreen!) true)
+    (= "F3" key)     (do (toggle-inspector!) true)
     (= "Escape" key) (do (ui/close!) true)
     ;; let ctrl combinations through: ctrl+w should not type a w
     ctrl?            false
@@ -315,7 +329,7 @@
                              (int top))}]]))
 
 (defn results-view [{:keys [test best source mode]} now]
-  (let [{:keys [wpm raw-wpm accuracy consistency seconds words chars
+  (let [{:keys [wpm raw-wpm cpm accuracy consistency seconds words chars
                 errors series error-series]}
         (e/summary test now)]
     [:vbox {:spacing 22 :valign :center}
@@ -323,6 +337,9 @@
       [:vbox {:spacing 0 :halign :center}
        [:label {:class "biglabel" :label "WPM"}]
        [:label {:class "big" :label (str (int wpm))}]]
+      [:vbox {:spacing 0 :halign :center}
+       [:label {:class "biglabel" :label "CPM"}]
+       [:label {:class "big" :label (str (int cpm))}]]
       [:vbox {:spacing 0 :halign :center}
        [:label {:class "biglabel" :label "ACCURACY"}]
        [:label {:class "big" :label (str (int (* 100 accuracy)) "%")}]]]

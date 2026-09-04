@@ -151,6 +151,13 @@
 (defcfn style-context-add-provider-for-display "gtk_style_context_add_provider_for_display"
   [:pointer :pointer :int] :void)
 
+;; -- the gtk inspector -------------------------------------------------------
+;; The same window GTK_DEBUG=interactive gives you, opened on demand. No env
+;; var and no keybinding setting is needed: this call shows the inspector
+;; itself, and a 0 hides it again. The inspector window is kept alive between
+;; toggles, so its "Frames" page keeps its history.
+(defcfn window-set-interactive-debugging "gtk_window_set_interactive_debugging" [:int] :void)
+
 ;; -- environment (must be set before GTK reads it, i.e. before the first
 ;; -- window is realized) ----------------------------------------------------
 (defcfn setenv "g_setenv" [:string :string :int] :int)

@@ -113,6 +113,11 @@
 (assert (= (:wpm m) (:wpm (e/summary perfect 999999))) "a finished test must not keep accruing")
 (assert (= 1.0 (:accuracy m)))
 (assert (= {:correct 16 :incorrect 0 :attempted 16} (:chars m)))
+;; cpm is the same reading without the five-characters-per-word divisor
+(println "   cpm" (format "%.1f" (:cpm m)) "raw cpm" (format "%.1f" (:raw-cpm m)))
+(assert (< 639.9 (:cpm m) 640.1) (str "cpm was " (:cpm m)))
+(assert (= (:cpm m) (* 5 (:wpm m))))
+(assert (= (:raw-cpm m) (* 5 (:raw-wpm m))))
 ;; raw counts everything typed, net only what was right
 (println "   one wrong char: wpm" (format "%.1f" (e/wpm sub 1600))
          "raw" (format "%.1f" (e/raw-wpm sub 1600)))
