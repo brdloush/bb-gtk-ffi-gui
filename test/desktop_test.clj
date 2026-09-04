@@ -30,11 +30,12 @@
 (assert (= n-apps (count (set (map :task desktop/apps)))) "duplicate tasks")
 (assert (every? #(every? (fn [k] (seq (get % k))) [:id :name :task :comment :categories])
                 desktop/apps))
-;; every app_id needs an icon committed in the repo
-(doseq [{:keys [id]} desktop/apps]
-  (assert (fs/exists? (str project "/icons/" id ".svg"))
-          (str "no icon for " id)))
-(println "   every app has an icon in icons/")
+;; every app_id needs an icon committed in the repo -- an SVG or, where the
+;; mark is drawn rather than hand-written, a PNG
+(doseq [app desktop/apps]
+  (assert (desktop/icon-source app project) (str "no icon for " (:id app))))
+(println "   every app has an icon in icons/:"
+         (mapv #(fs/file-name (desktop/icon-source % project)) desktop/apps))
 
 ;; --- 3. install writes exactly two files per app ----------------------
 (def written (desktop/install! project))
@@ -47,10 +48,23 @@
   (assert (str/starts-with? icon tmp) "wrote outside the temp data home!"))
 (println "   " (mapv #(fs/file-name (:desktop %)) written))
 
-;; the installed icon is the real SVG, not an empty file
-(def icon0 (:icon (first written)))
-(assert (> (fs/size icon0) 300) "icon suspiciously small")
-(assert (str/includes? (slurp icon0) "<svg") "installed icon is not an SVG")
+;; the installed icons are the real artwork, not empty files, and each one is
+;; in the hicolor directory its format belongs in: scalable for an SVG, a
+;; named pixel size for a PNG. Put an SVG under 512x512 and the shell scales
+;; it as if it were 512 wide.
+(doseq [{:keys [icon]} written]
+  (assert (> (fs/size icon) 300) (str "icon suspiciously small: " icon))
+  (case (fs/extension icon)
+    "svg" (do (assert (str/includes? (slurp icon) "<svg") "not an SVG")
+              (assert (str/includes? icon "/scalable/apps/") icon))
+    ;; the signature as bytes: slurp mangles the leading 0x89
+    "png" (do (assert (= [-119 80 78 71] (take 4 (fs/read-all-bytes icon)))
+                      "not a PNG")
+              (assert (str/includes? icon "/512x512/apps/") icon))
+    (assert false (str "unexpected icon format: " icon))))
+(println "   installed icons:" (mapv #(str (fs/file-name (fs/parent (fs/parent (:icon %))))
+                                           "/" (fs/file-name (:icon %)))
+                                     written))
 
 ;; the installed entry points at the project we passed
 (assert (str/includes? (slurp (:desktop (first written))) (str "Path=" project)))
@@ -60,6 +74,18 @@
 (def again (desktop/install! project))
 (println "4) re-install ok:" (= (map :desktop written) (map :desktop again)))
 (assert (= (map :desktop written) (map :desktop again)))
+
+;; --- 4b. replacing the artwork's format removes the old file ----------
+;; The theme lookup matches on the name, and a scalable SVG beats a 512px
+;; PNG, so an icon left behind in the other format would keep winning.
+(def babatype (last desktop/apps))
+(def stale (desktop/icon-path babatype "svg"))
+(fs/create-dirs (fs/parent stale))
+(spit stale "<svg/>")
+(desktop/install! project)
+(println "4b) stale" (fs/file-name stale) "still there:" (fs/exists? stale))
+(assert (not (fs/exists? stale)) "an icon in the superseded format must go")
+(assert (fs/exists? (desktop/icon-path babatype "png")) "the new icon must be there")
 
 ;; --- 5. uninstall removes exactly those, and is safe to repeat -------
 (def removed (desktop/uninstall!))

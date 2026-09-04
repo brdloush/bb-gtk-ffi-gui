@@ -39,10 +39,39 @@
     :categories "Game;Education;"}])
 
 (defn- applications-dir [] (str *data-home* "/applications"))
-(defn- icons-dir [] (str *data-home* "/icons/hicolor/scalable/apps"))
+
+(defn- icons-dir
+  "Which hicolor directory an icon belongs in. An SVG is scalable; a raster
+   icon has to name its own size, and ours are drawn at 512."
+  [ext]
+  (str *data-home* "/icons/hicolor/"
+       (if (= "svg" ext) "scalable" "512x512")
+       "/apps"))
+
+(def ^:private icon-exts
+  "Preferred first. An SVG scales to any size the shell asks for, so it wins
+   when an app has both."
+  ["svg" "png"])
+
+(defn icon-source
+  "The icon committed in the repo for `app`, or nil. `dir` is the project root.
+
+   Looking the file up rather than naming it in `apps` means dropping a
+   replacement PNG next to the SVG is the whole change."
+  [{:keys [id]} dir]
+  (first (for [ext icon-exts
+               :let [f (str dir "/icons/" id "." ext)]
+               :when (fs/exists? f)]
+           f)))
 
 (defn desktop-path [{:keys [id]}] (str (applications-dir) "/" id ".desktop"))
-(defn icon-path    [{:keys [id]}] (str (icons-dir) "/" id ".svg"))
+
+(defn icon-path
+  "Where an icon lands. The extension follows the source file, because the
+   theme lookup matches on the name only -- \"Icon=cz.brdloush.Babatype\"
+   finds either -- but the directory has to match the format."
+  ([app] (icon-path app "svg"))
+  ([{:keys [id]} ext] (str (icons-dir ext) "/" id "." ext)))
 
 (defn desktop-entry
   "The file contents. `dir` is the project root: it becomes Path=, so launching
@@ -77,17 +106,26 @@
   ([] (install! (str (fs/normalize (fs/absolutize ".")))))
   ([dir]
    (fs/create-dirs (applications-dir))
-   (fs/create-dirs (icons-dir))
    (let [written
          (vec (for [app apps
-                    :let [src (str dir "/icons/" (:id app) ".svg")]]
+                    :let [src (icon-source app dir)]]
                 (do
-                  (when-not (fs/exists? src)
+                  (when-not src
                     (throw (ex-info "icon missing -- run this from the project root"
-                                    {:expected src})))
-                  (fs/copy src (icon-path app) {:replace-existing true})
-                  (spit (desktop-path app) (desktop-entry app dir))
-                  {:desktop (desktop-path app) :icon (icon-path app)})))]
+                                    {:expected (str dir "/icons/" (:id app)
+                                                    ".{" (str/join "," icon-exts) "}")})))
+                  (let [dst (icon-path app (fs/extension src))]
+                    ;; an icon of the same name in another format, left by an
+                    ;; earlier install, would still be found -- and a scalable
+                    ;; SVG beats a 512px PNG in the theme lookup, so replacing
+                    ;; the artwork has to delete the one it replaces
+                    (doseq [stale (map #(icon-path app %) icon-exts)
+                            :when (and (not= stale dst) (fs/exists? stale))]
+                      (fs/delete stale))
+                    (fs/create-dirs (fs/parent dst))
+                    (fs/copy src dst {:replace-existing true})
+                    (spit (desktop-path app) (desktop-entry app dir))
+                    {:desktop (desktop-path app) :icon dst}))))]
      (refresh-caches!)
      written)))
 
@@ -95,7 +133,8 @@
   "Removes exactly what install! wrote, and nothing else."
   []
   (let [removed (vec (for [app apps
-                           f [(desktop-path app) (icon-path app)]
+                           f (cons (desktop-path app)
+                                   (map #(icon-path app %) icon-exts))
                            :when (fs/exists? f)]
                        (do (fs/delete f) f)))]
     (refresh-caches!)

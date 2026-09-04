@@ -357,14 +357,20 @@
 (def logo-file
   "The mark, looked up relative to the working directory. The bb tasks set
    Path= to the project root, so this resolves; if it does not, :picture leaves
-   a blank space rather than failing."
-  "icons/cz.brdloush.Babatype.svg")
+   a blank space rather than failing.
+
+   The same file the .desktop install uses, so the header and the switcher
+   never drift apart."
+  "icons/cz.brdloush.Babatype.png")
 
 (defn header []
   [:hbox {:spacing 10 :halign :start :valign :start}
    ;; :icon, not :picture: pixel-size is an actual size, where a picture's size
    ;; request is only a minimum and a 512px texture would ask for 512px
-   [:icon {:file logo-file :size 38 :valign :center}]
+   ;; 52, not 38: the mark is nearly twice as tall as it is wide, and
+   ;; pixel-size caps the *height*, so a square-icon size would leave it a
+   ;; third of the wordmark's width and lose the typewriter to mush
+   [:icon {:file logo-file :size 52 :valign :center}]
    [:vbox {:spacing 0 :valign :center}
     [:label {:class "wordmark" :xalign 0
              :markup (str "ba<span foreground='#dd1111'>·</span>"

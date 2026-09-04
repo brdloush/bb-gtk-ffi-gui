@@ -304,18 +304,25 @@ Two details that matter:
 
 - **`Path=`** is set to the project root, so a dock launch works from any
   working directory. Without it `bb weather` cannot find the tasks.
-- **The icon name equals the app_id**, so the `.desktop` file, the SVG and the
-  live window all agree on one string.
+- **The icon name equals the app_id**, so the `.desktop` file, the icon file and
+  the live window all agree on one string.
 
 ### The icons are ours
 
 The theme turns out to be thin here. `x-office-presentation` exists, but there
 is no full-colour system-monitor or weather icon at all -- only symbolic glyphs,
-which look flat as an app icon. So `icons/` holds hand-written SVGs, one per
-app. Change them and re-run `bb install-desktop`.
+which look flat as an app icon. So `icons/` holds one icon per app, named after
+the app_id. Change them and re-run `bb install-desktop`.
 
-Babatype gets a proper mark: babashka's red head and black sunglasses, but the
-lenses read as a text caret and an underscore, and it wears a keyboard.
+Either format works: `icons/<app_id>.svg` installs into hicolor's `scalable`
+directory, `icons/<app_id>.png` into `512x512`, and the `.desktop` file names
+neither -- `Icon=` carries the bare name and the theme lookup picks the file.
+Replacing an icon with the other format deletes the one it replaces, because a
+scalable SVG left behind would keep beating a 512px PNG.
+
+Babatype gets a proper mark: babashka's hooded red head in black sunglasses,
+sat at a typewriter. It is also the icon the app draws in its own header, from
+the same file, so the header and the switcher cannot drift apart.
 
 ![Babatype logo](docs/babatype-logo.png)
 
