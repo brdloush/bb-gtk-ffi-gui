@@ -17,6 +17,7 @@
             [clojure.string :as str]
             [gtk.adw :as adw]
             [gtk.core :as ui]
+            [gtk.dev :as dev]
             [babashka.ffi :as ffi]
             [gtk.ffi :as g]
             [gtk.ratom :as r]))
@@ -195,30 +196,132 @@
         (recur (rest ls) (+ at (count target) 1)))
       at)))
 
-(defn place-caret!
-  "Puts the caret bar exactly where the next character will go, by asking the
-   label's Pango layout for that index's pixel position. Monospace would let us
-   multiply, but asking is exact and survives a font change."
+(def caret-slide-ms
+  "How long the caret takes to slide to the next character. Long enough to be
+   seen, short enough that a fast typist never sees it lag behind."
+  70)
+
+(def caret-jump
+  "A move wider than this is not a step to the next character -- it is a line
+   wrap, a restart, or a whole word deleted. Sliding across the screen for
+   those looks wrong, so they snap."
+  120)
+
+(defonce ^:private caret-anim
+  ;; x and h are animated, y is not: y only changes on a line wrap, which snaps
+  ;; anyway. x0/h0 are where the current move started, tx/th where it ends.
+  (atom {:widget nil :live? false :settled? true :y 0
+         :x0 0.0 :h0 0.0 :tx 0.0 :th 0.0 :t0 0}))
+
+;; The animator waits on this rather than polling, so an idle app stays idle.
+(defonce ^:private caret-wake (Object.))
+
+;; True only while caret-tick! is running. Without it nobody would ever draw
+;; the frames after the first, so a lone place-caret! -- the screenshot tool
+;; does exactly that -- snaps instead of freezing the bar mid-slide.
+(defonce ^:private caret-driven? (volatile! false))
+
+(defn- caret-target
+  "Where the caret belongs right now: [x y height] in pixels, asked of the
+   label's Pango layout. Monospace would let us multiply, but asking is exact
+   and survives a font change. Nil before the label has been laid out."
   [tree]
-  (let [lbl (find-node tree "passage")
-        car (find-node tree "caret")]
-    (when (and lbl car)
-      (let [idx (caret-index (e/visible-lines (:test @state) visible-line-count))
-            layout (g/label-get-layout (:widget lbl))]
-        (with-open [arena (ffi/confined-arena)]
-          (let [ox   (ffi/alloc arena :int)
-                oy   (ffi/alloc arena :int)
-                rect (ffi/alloc arena 16)]     ; PangoRectangle: 4 ints
-            (g/label-get-layout-offsets (:widget lbl) ox oy)
-            (g/pango-index-to-pos layout (int idx) rect)
-            (let [px (+ (ffi/read ox :int)
-                        (quot (ffi/read rect :int 0) g/PANGO-SCALE))
-                  py (+ (ffi/read oy :int)
-                        (quot (ffi/read rect :int 4) g/PANGO-SCALE))
-                  h  (quot (ffi/read rect :int 12) g/PANGO-SCALE)]
-              (g/widget-set-margin-start (:widget car) (max 0 px))
-              (g/widget-set-margin-top (:widget car) (max 0 py))
-              (g/widget-set-size-request (:widget car) caret-width h))))))))
+  (when-let [lbl (find-node tree "passage")]
+    (let [idx (caret-index (e/visible-lines (:test @state) visible-line-count))
+          layout (g/label-get-layout (:widget lbl))]
+      (with-open [arena (ffi/confined-arena)]
+        (let [ox   (ffi/alloc arena :int)
+              oy   (ffi/alloc arena :int)
+              rect (ffi/alloc arena 16)]     ; PangoRectangle: 4 ints
+          (g/label-get-layout-offsets (:widget lbl) ox oy)
+          (g/pango-index-to-pos layout (int idx) rect)
+          [(+ (ffi/read ox :int)
+              (quot (ffi/read rect :int 0) g/PANGO-SCALE))
+           (+ (ffi/read oy :int)
+              (quot (ffi/read rect :int 4) g/PANGO-SCALE))
+           (quot (ffi/read rect :int 12) g/PANGO-SCALE)])))))
+
+(defn- caret-draw!
+  "Moves the bar. Two margins and a size request -- no re-render, so this is
+   cheap enough to do every frame. Main-loop thread only."
+  [widget x y h]
+  (g/widget-set-margin-start widget (max 0 (int x)))
+  (g/widget-set-margin-top widget (max 0 (int y)))
+  (g/widget-set-size-request widget caret-width (max 0 (int h))))
+
+(defn- lerp [a b f] (+ a (* (- b a) f)))
+
+(defn- caret-frame
+  "[x h] at time `now`: linear from where the move started to where it ends."
+  [{:keys [x0 h0 tx th t0]} now]
+  (let [f (min 1.0 (/ (double (- now t0)) caret-slide-ms))]
+    [(lerp x0 tx f) (lerp h0 th f)]))
+
+(defn- caret-retarget
+  "Points the animation at a new spot, starting from wherever the bar is drawn
+   at this instant so a move interrupted mid-flight carries on smoothly.
+   Unchanged targets are left alone: on-render fires far more often than the
+   caret moves, and restarting the clock each time would freeze it in place."
+  [{:keys [live? tx th y] :as a} widget [nx ny nh] now]
+  (if (and live? (== nx tx) (== ny y) (== nh th))
+    (assoc a :widget widget)
+    (let [[x h] (if live? (caret-frame a now) [nx nh])
+          snap? (or (not @caret-driven?)
+                    (not live?)
+                    (not= ny y)
+                    (> (Math/abs (- nx x)) caret-jump))]
+      (assoc a :widget widget :live? true :settled? false :y ny
+             :x0 (if snap? (double nx) x)
+             :h0 (if snap? (double nh) h)
+             :tx (double nx) :th (double nh) :t0 now))))
+
+(defn place-caret!
+  "Aims the caret at the character about to be typed and draws the first frame
+   of the move. caret-tick! draws the rest."
+  [tree]
+  (when-let [car (find-node tree "caret")]
+    (when-let [target (caret-target tree)]
+      (let [now (System/currentTimeMillis)
+            before @caret-anim
+            a (swap! caret-anim caret-retarget (:widget car) target now)
+            [x h] (caret-frame a now)]
+        (caret-draw! (:widget car) x (:y a) h)
+        (when (not= (:t0 before) (:t0 a))
+          (locking caret-wake (.notifyAll caret-wake)))))))
+
+(defn caret-tick!
+  "Draws the caret at ~60 Hz while it is in flight, and nothing at all once it
+   has arrived: the loop waits to be woken by place-caret!. Only the caret's
+   own margins are touched -- a full re-render every frame to move a three
+   pixel bar would be silly -- and the widget calls go through later! because
+   this is not the main-loop thread. Returns a fn that stops it."
+  []
+  (let [running? (volatile! true)]
+    (vreset! caret-driven? true)
+    (future
+      (while @running?
+        (let [{:keys [widget live? settled? t0] :as a} @caret-anim
+              now (System/currentTimeMillis)
+              flying? (and widget live? (not settled?))]
+          (cond
+            (not flying?)
+            (locking caret-wake (.wait caret-wake 1000))
+
+            (< (- now t0) caret-slide-ms)
+            (let [[x h] (caret-frame a now)]
+              (dev/later! #(caret-draw! widget x (:y a) h))
+              (Thread/sleep 16))
+
+            ;; the sleep always overshoots the deadline a little, so the last
+            ;; frame is drawn from the clamped fraction: exactly the target.
+            :else
+            (let [[x h] (caret-frame a now)]
+              (dev/later! #(caret-draw! widget x (:y a) h))
+              (swap! caret-anim
+                     #(if (= (:t0 %) t0) (assoc % :settled? true) %)))))))
+    #(do (vreset! running? false)
+         (vreset! caret-driven? false)
+         (locking caret-wake (.notifyAll caret-wake)))))
 
 (defn- mode-button [label on? f]
   ;; :focusable false so a button can never hold focus and swallow the space
@@ -400,7 +503,8 @@
 (defn app [] (fn [] (home state)))
 
 (defn -main [& _]
-  (let [stop (tick!)]
+  (let [stop (tick!)
+        stop-caret (caret-tick!)]
     (try
       (ui/run (app)
               :title "Babatype"
@@ -414,4 +518,4 @@
                           (ui/load-css! css)
                           (g/window-fullscreen win))
               :on-render (fn [_win tree] (place-caret! tree)))
-      (finally (stop)))))
+      (finally (stop) (stop-caret)))))
