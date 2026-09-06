@@ -10,12 +10,14 @@
 
    All the logic lives in babaengine, pure and tested without a window.
 
+   Nothing here needs libadwaita: the look is this app's own CSS, and GTK4
+   already carries the Adwaita stylesheet. So it runs anywhere GTK4 runs.
+
    Run it with `bb babatype`."
   (:require [babaengine :as e]
             [babatype-css]
             [babawords :as w]
             [clojure.string :as str]
-            [gtk.adw :as adw]
             [gtk.core :as ui]
             [gtk.dev :as dev]
             [babashka.ffi :as ffi]
@@ -517,7 +519,7 @@
               :app-id "cz.brdloush.Babatype"
               :app-name "Babatype"
               :width 1100 :height 700
-              :window adw/window
+              :window ui/chromeless-window
               ;; A typing test wants the whole screen: nothing else on it is
               ;; useful while you are typing. F11 or F5 goes back.
               :on-ready (fn [win _tree]

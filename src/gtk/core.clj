@@ -224,6 +224,61 @@
   {:vbox   (box-spec g/VERTICAL)
    :hbox   (box-spec g/HORIZONTAL)
 
+   ;; A single-child holder that hands the child its whole allocation, so a
+   ;; child with :valign :center really does sit in the middle. A one-child
+   ;; GtkBox would not: a box gives its child the natural height and no more.
+   ;; gtk.adw replaces this with AdwBin, which is the same idea.
+   :bin    {:ctor   (fn [_] (g/overlay-new))
+            :apply  (fn [_ _ _] nil)
+            :append (fn [parent child _props] (g/overlay-set-child parent child))
+            :remove (fn [parent _child _props] (g/overlay-set-child parent nil))}
+
+   ;; Keeps content a readable width, centred. Plain GTK4 has no maximum-width
+   ;; layout, so :max becomes a width request instead: the child is exactly
+   ;; :max wide and centred, which is what AdwClamp does whenever there is room
+   ;; for it. The difference is at the bottom end -- a size request is a
+   ;; minimum, so the window cannot be resized narrower than :max, where a real
+   ;; AdwClamp would let the content shrink. gtk.adw replaces it with the real
+   ;; AdwClamp, which is what runs on a GNOME desktop.
+   :clamp  (merge (box-spec g/VERTICAL)
+                  {:ctor (fn [p]
+                           (doto (g/box-new g/VERTICAL 0)
+                             (g/widget-set-halign (get g/align :center 0))
+                             (g/widget-set-size-request (int (:max p -1)) -1)))
+                   :apply (fn [_ _ _] nil)})
+
+   ;; One child underneath, any number floating on top. A child with
+   ;; :slot :over floats; anything else is the content. Overlaid children are
+   ;; positioned with :halign/:valign plus margins, which is how you put a
+   ;; caret at a measured pixel offset.
+   :overlay {:ctor   (fn [_] (g/overlay-new))
+             :apply  (fn [_ _ _] nil)
+             :append (fn [parent child props]
+                       (if (= :over (:slot props :content))
+                         (g/overlay-add-overlay parent child)
+                         (g/overlay-set-child parent child)))
+             :remove (fn [parent child props]
+                       (if (= :over (:slot props :content))
+                         (g/overlay-remove-overlay parent child)
+                         (g/overlay-set-child parent nil)))}
+
+   ;; :icon takes a theme name, :file takes a path -- an SVG works either way.
+   ;; GtkImage's pixel-size is an actual size, not a minimum, so it scales a
+   ;; high-resolution source down cleanly.
+   :icon   {:text-prop :icon
+            :ctor  (fn [p]
+                     (doto (if (:file p)
+                             (g/image-new-from-file (str (:file p)))
+                             (g/image-new-from-icon (:icon p)))
+                       (g/image-set-pixel-size (int (:size p -1)))))
+            :apply (fn [w p changed]
+                     (when (contains? changed :file)
+                       (g/image-set-from-file w (str (:file p))))
+                     (when (and (contains? changed :icon) (not (:file p)))
+                       (g/image-set-from-icon w (:icon p)))
+                     (when (contains? changed :size)
+                       (g/image-set-pixel-size w (int (:size p -1)))))}
+
    ;; :markup is Pango markup and wins over :label when both are given. Whatever
    ;; builds it must escape first -- see the deck example's `escape`.
    :label  {:text-prop :label
@@ -485,6 +540,13 @@
    an AdwWindow instead, which has no titlebar of its own -- which is what makes
    an Adw header bar look right."
   {:ctor        g/window-new
+   :set-content g/window-set-child})
+
+(def chromeless-window
+  "A GtkWindow with no titlebar, for an app that draws its own top edge. The
+   plain-GTK4 stand-in for `gtk.adw/window`, so a view that wants an edge-to-edge
+   surface does not have to pull libadwaita in."
+  {:ctor        (fn [] (doto (g/window-new) (g/window-set-decorated 0)))
    :set-content g/window-set-child})
 
 (defn- root-spec [{:keys [set-content]}]

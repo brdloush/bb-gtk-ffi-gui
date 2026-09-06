@@ -25,6 +25,10 @@ boot**. No word list ships with it: the app types the language it is written in.
 
 ![Babatype results](docs/babatype-results.png)
 
+Babatype is the one example that needs **no libadwaita**: the look is its own
+CSS over the Adwaita stylesheet GTK4 already carries, and the window is
+`ui/chromeless-window`. So it runs wherever GTK4 runs, not only on GNOME.
+
 Difficulty falls out of the names themselves -- `core` is the plain ones,
 `symbols` adds `->>` `some?` `swap!` `*ns*`, and `everything` adds the monsters
 up to `set-agent-send-off-executor!`.
@@ -700,15 +704,13 @@ namespace add 14 widget tags, a window type and a stylesheet from outside.
 | `:row` | `:title` `:subtitle` | `:prefix`, else `:suffix` |
 | `:status-page` | `:title` `:description` `:icon` | -- |
 | `:toast-overlay` | -- | one child |
-| `:bin` `:clamp` | `:clamp` takes `:max` width | one child |
+| `:bin` `:clamp` | `:clamp` takes `:max` width. Both **replace** the plain-GTK4 tags of the same name with AdwBin and AdwClamp | one child |
 | `:scroll` | `:h` `:v` scrollbar policy: `:automatic` `:never` `:always` `:external` | one child |
 | `:banner` | `:title` `:revealed` | -- |
 | `:spinner` | -- | -- |
-| `:overlay` | -- | one child, plus any number with `:slot :over` floating on top |
 | `:carousel` | `:page` (an index -- changing it **animates**), `:animate`, `:drag`, `:wheel` | pages |
 | `:revealer` | `:revealed` `:duration` | one child |
 | `:level` | `:value` `:min` `:max` `:width` | -- |
-| `:icon` | `:icon` (theme name) or `:file` (a path, SVG included), `:size` | -- |
 | `:picture` | `:file` | -- |
 | `:icon-button` | `:icon` | -- |
 | `:adw-window` | -- | one child |
@@ -739,6 +741,10 @@ the common props below.
 | `:button` | `:label` | `:on-click` | text only |
 | `:check` | `:label` `:active` | `:on-toggle` | text only |
 | `:entry` | `:value` `:placeholder` | `:on-change` `:on-activate` | text only |
+| `:bin` | -- | -- | one child, given the whole allocation |
+| `:clamp` | `:max` width | -- | one child, centred |
+| `:overlay` | -- | -- | one child, plus any number with `:slot :over` floating on top |
+| `:icon` | `:icon` (theme name) or `:file` (a path, SVG included), `:size` | -- | -- |
 
 Common props, on every widget:
 

@@ -74,6 +74,20 @@
 (defcfn window-set-child "gtk_window_set_child" [:pointer :pointer] :void)
 (defcfn window-present "gtk_window_present" [:pointer] :void)
 (defcfn window-destroy "gtk_window_destroy" [:pointer] :void)
+(defcfn window-set-decorated "gtk_window_set_decorated" [:pointer :int] :void)
+
+;; -- overlay ----------------------------------------------------------------
+(defcfn overlay-new "gtk_overlay_new" [] :pointer)
+(defcfn overlay-set-child "gtk_overlay_set_child" [:pointer :pointer] :void)
+(defcfn overlay-add-overlay "gtk_overlay_add_overlay" [:pointer :pointer] :void)
+(defcfn overlay-remove-overlay "gtk_overlay_remove_overlay" [:pointer :pointer] :void)
+
+;; -- image ------------------------------------------------------------------
+(defcfn image-new-from-icon "gtk_image_new_from_icon_name" [:string] :pointer)
+(defcfn image-new-from-file "gtk_image_new_from_file" [:string] :pointer)
+(defcfn image-set-from-file "gtk_image_set_from_file" [:pointer :string] :void)
+(defcfn image-set-from-icon "gtk_image_set_from_icon_name" [:pointer :string] :void)
+(defcfn image-set-pixel-size "gtk_image_set_pixel_size" [:pointer :int] :void)
 
 ;; -- widget (common) --------------------------------------------------------
 (defcfn widget-set-sensitive "gtk_widget_set_sensitive" [:pointer :int] :void)
