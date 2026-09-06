@@ -4,7 +4,11 @@
 (require '[babashka.ffi :as ffi :refer [defcfn]]
          '[babashka.fs :as fs] '[cheshire.core :as json]
          '[gtk.adw :as adw] '[gtk.core :as ui] '[gtk.ffi :as g]
-         '[openmeteo :as om] '[weather])
+         '[i18n] '[openmeteo :as om] '[weather])
+
+;; English, whatever locale this machine runs in: the strings below are the
+;; English ones. test/i18n_test.clj is where both languages are checked.
+(i18n/set-lang! :en)
 (defcfn label-get-text "gtk_label_get_text" [:pointer] :string)
 (defcfn row-get-title "adw_preferences_row_get_title" [:pointer] :string)
 
@@ -44,6 +48,7 @@
 ;; --- 4. the offline path: render from cache, with no network ----------
 (weather/write-config! {:place {:name "Prague" :country "Czechia" :lat 50.07 :lon 14.43}
                         :units :metric
+                        :lang :en
                         :cache fixture
                         :fetched-at (- (System/currentTimeMillis) (* 60000 200))})
 (weather/reset-state!)

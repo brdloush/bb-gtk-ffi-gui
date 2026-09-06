@@ -9,6 +9,11 @@
    are created once and patched forever, which is what lets this app skip both
    keyed reconciliation and widget-lifetime management.
 
+   English and Czech: the strings are in `weather-i18n`, the language starts
+   from the environment, and the header switches it. Nothing here translates
+   anything -- `openmeteo` already hands over a view model in the language in
+   force, so a switch is just a rebuild from the cached response.
+
    Run it with `bb weather`."
   (:require [babashka.fs :as fs]
             [clojure.edn :as edn]
@@ -16,8 +21,10 @@
             [gtk.core :as ui]
             [gtk.ffi :as g]
             [gtk.ratom :as r]
+            [i18n :refer [t]]
             [openmeteo :as om]
-            [weather-css :as wcss]))
+            [weather-css :as wcss]
+            [weather-i18n]))
 
 (def css
   "The stylesheet, re-exported so tooling does not need to know where it lives."
@@ -34,29 +41,49 @@
            (str (System/getProperty "user.home") "/.config"))
        "/bb-weather.edn"))
 
-(def default-config
+(defn default-config
   "No IP geolocation: that would mean handing our address to a third party.
-   The city lives here, and the geocoding call sends only what you type."
-  {:place {:name "Prague" :region "Prague" :country "Czechia"
-           :lat 50.0755 :lon 14.4378}
-   :units :metric})
+   The city lives here, and the geocoding call sends only what you type.
 
-(defn read-config []
-  (merge default-config
-         (try (when (fs/exists? *config-path*)
-                (edn/read-string (slurp *config-path*)))
-              (catch Exception _ nil))))
+   A function, not a constant, because the default place names itself in the
+   language in force -- and that is only known once the config has been read."
+  []
+  {:place {:name (t :place/name) :region (t :place/name) :country (t :place/country)
+           :lat 50.0755 :lon 14.4378}
+   :units :metric
+   ;; the environment decides on a first run; the header decides after that
+   :lang (i18n/detect)})
+
+(defn read-config
+  "Reads the config and **applies the language in it**, because everything
+   after this point -- the default place's own name included -- is built in
+   whatever language is in force. A file with no `:lang`, or no file at all,
+   takes the language from the environment."
+  []
+  (let [saved (try (when (fs/exists? *config-path*)
+                     (edn/read-string (slurp *config-path*)))
+                   (catch Exception _ nil))]
+    (i18n/set-lang! (or (:lang saved) (i18n/detect)))
+    (merge (default-config) saved)))
 
 (defn write-config! [m]
   (try
     (fs/create-dirs (fs/parent *config-path*))
-    (spit *config-path* (pr-str (select-keys m [:place :units :cache :fetched-at])))
+    (spit *config-path* (pr-str (select-keys m [:place :units :lang :cache :fetched-at])))
     (catch Exception e
       (println "[weather] could not save config:" (ex-message e)))))
 
 ;; ---------------------------------------------------------------------------
 ;; state
 ;; ---------------------------------------------------------------------------
+
+(defn- vm-from
+  "The view model for a config, from whatever response is cached in it. nil
+   when nothing has been fetched yet. Both the units switch and the language
+   switch are this and nothing more."
+  [{:keys [cache place units fetched-at]}]
+  (when cache
+    (om/view-model cache place {:units units :fetched-at fetched-at})))
 
 (defonce state
   (r/atom {:config (read-config)
@@ -92,13 +119,7 @@
   "Render whatever was on disk, so the window opens with real content instead
    of a spinner. Marked with its age by the banner."
   []
-  (swap! state
-         (fn [s]
-           (let [{:keys [cache fetched-at place units]} (:config s)]
-             (if cache
-               (assoc s :vm (om/view-model cache place
-                                           {:units units :fetched-at fetched-at}))
-               s)))))
+  (swap! state (fn [s] (if-let [vm (vm-from (:config s))] (assoc s :vm vm) s))))
 
 (defn refresh!
   "Fetch on this thread -- callers put it on a worker. Never throws."
@@ -129,12 +150,25 @@
                  (let [cfg (update-in (:config s) [:units]
                                       {:metric :imperial :imperial :metric})]
                    (write-config! cfg)
-                   (assoc s :config cfg
-                          :vm (when-let [c (:cache cfg)]
-                                (om/view-model c (:place cfg)
-                                               {:units (:units cfg)
-                                                :fetched-at (:fetched-at cfg)}))))))
+                   (assoc s :config cfg :vm (vm-from cfg)))))
   (future (refresh!)))
+
+(defn next-language
+  "The language after this one, wrapping. Two of them, so it is a toggle.
+   Anything unknown lands on the first, which is English."
+  [lang]
+  (let [ls i18n/languages]
+    (nth ls (mod (inc (.indexOf ^java.util.List ls lang)) (count ls)))))
+
+(defn set-language!
+  "Switches language everywhere. No fetch: every string the UI shows is built
+   from the cached response, so rebuilding the view model is the whole job."
+  [lang]
+  (let [lang (i18n/set-lang! lang)]
+    (swap! state (fn [s]
+                   (let [cfg (assoc (:config s) :lang lang)]
+                     (write-config! cfg)
+                     (assoc s :config cfg :vm (vm-from cfg)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; view
@@ -143,7 +177,7 @@
 (defn hour-cell [now? {:keys [time temp-label precip icon]}]
   [:vbox {:spacing 3 :halign :center
           :class (if now? ["hour" "now"] ["hour"])}
-   [:label {:class "h-time" :halign :center :label (if now? "now" time)}]
+   [:label {:class "h-time" :halign :center :label (if now? (t :ui/now) time)}]
    [:icon {:icon icon :size 20 :halign :center}]
    [:label {:class "h-temp" :halign :center :label temp-label}]
    [:label {:class "h-pop" :halign :center
@@ -160,8 +194,9 @@
      [:icon {:icon (:icon current) :size 22}]
      [:label {:class "condition" :label (:label current)}]]
     [:label {:class "sub" :halign :center
-             :label (str "Feels like " (:feels current)
-                         "   ·   H " (:hi today) "   L " (:lo today))}]
+             :label (str (t :ui/feels-like) " " (:feels current)
+                         "   ·   " (t :ui/hi) " " (:hi today)
+                         "   " (t :ui/lo) " " (:lo today))}]
     [:scroll {:h :automatic :v :never :hexpand true :margin 8 :class "hourly"}
      (into [:hbox {:spacing 2 :halign :center}]
            (map-indexed (fn [i h] (hour-cell (zero? i) h)) hourly))]]])
@@ -186,8 +221,8 @@
    (hero vm)
    [:clamp {:max 620}
     [:vbox {:spacing 14 :margin 14}
-     (into [:group {:title "7 days"}] (map day-row daily))
-     (into [:group {:title "Details"
+     (into [:group {:title (t :ui/week)}] (map day-row daily))
+     (into [:group {:title (t :ui/details)
                     :description (str (:timezone place)
                                       (when (:elevation place)
                                         (format "  ·  %.0f m" (:elevation place))))}]
@@ -195,12 +230,12 @@
 
 (defn loading []
   [:status-page {:icon "weather-few-clouds-symbolic"
-                 :title "Fetching the forecast"
-                 :description "Open-Meteo, no account needed."}])
+                 :title (t :ui/loading)
+                 :description (t :ui/loading-sub)}])
 
 (defn failed [err]
   [:status-page {:icon "network-offline-symbolic"
-                 :title "Could not reach Open-Meteo"
+                 :title (t :ui/failed)
                  :description (str err)}])
 
 (defn home [state]
@@ -209,12 +244,12 @@
     [:toast-overlay {}
      [:toolbar-view {}
       [:header-bar {:slot :top}
-       [:window-title {:title "Weather"
+       [:window-title {:title (t :ui/title)
                        :subtitle (or (:name (:place config)) "")}]
        [:entry {:slot :start
                 :value ""
-                :placeholder "Search a city"
-                :tooltip "Search for a city, then press Enter"
+                :placeholder (t :ui/search)
+                :tooltip (t :ui/search-tip)
                 :on-activate
                 (fn [q]
                   (future
@@ -223,16 +258,21 @@
                           (when-let [o @overlay]
                             (adw/toast! o (str (:name hit) ", " (:country hit)))))
                       (when-let [o @overlay]
-                        (adw/toast! o (str "No place called \"" q "\""))))))}]
+                        (adw/toast! o (t :ui/no-place q))))))}]
        [:icon-button {:slot :end
                       :icon "view-refresh-symbolic"
-                      :tooltip "Refresh now"
+                      :tooltip (t :ui/refresh-tip)
                       :on-click #(future (refresh!))}]
        [:button {:slot :end
                  :class "flat"
                  :label (if (= :imperial (:units config)) "°F" "°C")
-                 :tooltip "Switch units"
-                 :on-click #(toggle-units!)}]]
+                 :tooltip (t :ui/units-tip)
+                 :on-click #(toggle-units!)}]
+       [:button {:slot :end
+                 :class "flat"
+                 :label (get i18n/language-names i18n/*lang* "EN")
+                 :tooltip (t :ui/language-tip)
+                 :on-click #(set-language! (next-language i18n/*lang*))}]]
       [:vbox {:spacing 0}
        (when (or stale error)
          [:banner {:title (or error stale) :revealed true}])
@@ -258,9 +298,9 @@
   (let [stop (start-polling!)]
     (try
       (ui/run (app)
-              :title "Weather"
+              :title (t :ui/title)
               :app-id "cz.brdloush.BbWeather"
-              :app-name "Weather"
+              :app-name (t :ui/title)
               :width 560 :height 820
               :window adw/window
               :on-ready (fn [_win tree]

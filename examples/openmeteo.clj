@@ -6,46 +6,52 @@
    captured response with no network. See test/openmeteo_test.clj.
 
    Privacy: no IP geolocation. The place comes from config, and a geocoding
-   request sends only the name that was typed."
+   request sends only the name that was typed.
+
+   Every string it produces goes through `i18n/t`, so a view model built while
+   Czech is in force is already Czech -- the UI never translates anything."
   (:require [babashka.http-client :as http]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [i18n :refer [t]]
+            [weather-i18n]))
 
 ;; ---------------------------------------------------------------------------
 ;; WMO weather codes
 ;; ---------------------------------------------------------------------------
 
 (def ^:private conditions
-  "WMO code -> label, icon stem, and the sky palette to paint behind it.
+  "WMO code -> icon stem and the sky palette to paint behind it. The label is
+   not here: it lives in the dictionary, under :cond/<code>.
    Icon stems get -symbolic, and a -night- variant where the theme has one."
-  {0  ["Clear"                 "weather-clear"             :clear]
-   1  ["Mainly clear"          "weather-few-clouds"        :clear]
-   2  ["Partly cloudy"         "weather-few-clouds"        :few]
-   3  ["Overcast"              "weather-overcast"          :overcast]
-   45 ["Fog"                   "weather-fog"               :fog]
-   48 ["Freezing fog"          "weather-fog"               :fog]
-   51 ["Light drizzle"         "weather-showers-scattered" :rain]
-   53 ["Drizzle"               "weather-showers-scattered" :rain]
-   55 ["Heavy drizzle"         "weather-showers-scattered" :rain]
-   56 ["Freezing drizzle"      "weather-showers-scattered" :rain]
-   57 ["Freezing drizzle"      "weather-showers-scattered" :rain]
-   61 ["Light rain"            "weather-showers"           :rain]
-   63 ["Rain"                  "weather-showers"           :rain]
-   65 ["Heavy rain"            "weather-showers"           :rain]
-   66 ["Freezing rain"         "weather-showers"           :rain]
-   67 ["Freezing rain"         "weather-showers"           :rain]
-   71 ["Light snow"            "weather-snow"              :snow]
-   73 ["Snow"                  "weather-snow"              :snow]
-   75 ["Heavy snow"            "weather-snow"              :snow]
-   77 ["Snow grains"           "weather-snow"              :snow]
-   80 ["Light showers"         "weather-showers-scattered" :rain]
-   81 ["Showers"               "weather-showers"           :rain]
-   82 ["Violent showers"       "weather-showers"           :rain]
-   85 ["Snow showers"          "weather-snow"              :snow]
-   86 ["Heavy snow showers"    "weather-snow"              :snow]
-   95 ["Thunderstorm"          "weather-storm"             :storm]
-   96 ["Thunderstorm, hail"    "weather-storm"             :storm]
-   99 ["Thunderstorm, hail"    "weather-storm"             :storm]})
+  {0  ["weather-clear"             :clear]
+   1  ["weather-few-clouds"        :clear]
+   2  ["weather-few-clouds"        :few]
+   3  ["weather-overcast"          :overcast]
+   45 ["weather-fog"               :fog]
+   48 ["weather-fog"               :fog]
+   51 ["weather-showers-scattered" :rain]
+   53 ["weather-showers-scattered" :rain]
+   55 ["weather-showers-scattered" :rain]
+   56 ["weather-showers-scattered" :rain]
+   57 ["weather-showers-scattered" :rain]
+   61 ["weather-showers"           :rain]
+   63 ["weather-showers"           :rain]
+   65 ["weather-showers"           :rain]
+   66 ["weather-showers"           :rain]
+   67 ["weather-showers"           :rain]
+   71 ["weather-snow"              :snow]
+   73 ["weather-snow"              :snow]
+   75 ["weather-snow"              :snow]
+   77 ["weather-snow"              :snow]
+   80 ["weather-showers-scattered" :rain]
+   81 ["weather-showers"           :rain]
+   82 ["weather-showers"           :rain]
+   85 ["weather-snow"              :snow]
+   86 ["weather-snow"              :snow]
+   95 ["weather-storm"             :storm]
+   96 ["weather-storm"             :storm]
+   99 ["weather-storm"             :storm]})
 
 (def ^:private has-night-variant
   "Only these icon stems have a -night- form in the Adwaita theme."
@@ -53,9 +59,11 @@
 
 (defn condition
   "Everything the UI needs about a weather code: {:label :icon :sky}.
-   `day?` picks the night icon and the night palette where they exist."
+   `day?` picks the night icon and the night palette where they exist.
+   The label is in whatever language `i18n/*lang*` currently names."
   [code day?]
-  (let [[label stem sky] (get conditions code ["Unknown" "weather-severe-alert" :overcast])]
+  (let [[stem sky] (get conditions code ["weather-severe-alert" :overcast])
+        label (get (t :cond/labels) code (t :cond/unknown))]
     {:label label
      :icon  (if (and (not day?) (has-night-variant stem))
               (str stem "-night-symbolic")
@@ -95,11 +103,13 @@
     (json/parse-string body true)))
 
 (defn search-places!
-  "Geocoding, also keyless. Sends only the typed name."
+  "Geocoding, also keyless. Sends only the typed name -- and the language, so
+   the answer comes back as `Praha, Česko` rather than `Prague, Czechia`."
   [q]
   (when-not (str/blank? q)
-    (let [url (str "https://geocoding-api.open-meteo.com/v1/search?count=8&name="
-                   (java.net.URLEncoder/encode (str/trim q) "UTF-8"))
+    (let [url (str "https://geocoding-api.open-meteo.com/v1/search?count=8"
+                   "&language=" (name i18n/*lang*)
+                   "&name=" (java.net.URLEncoder/encode (str/trim q) "UTF-8"))
           {:keys [status body]} (http/get url {:timeout 8000})]
       (when (= 200 status)
         (->> (:results (json/parse-string body true))
@@ -135,20 +145,20 @@
 (defn- day-name
   "Today, Tomorrow, then the weekday. Keeps the 7-day list readable."
   [date-str today-str]
-  (let [d (java.time.LocalDate/parse date-str)
-        t (java.time.LocalDate/parse today-str)
-        delta (- (.toEpochDay d) (.toEpochDay t))]
+  (let [d     (java.time.LocalDate/parse date-str)
+        today (java.time.LocalDate/parse today-str)
+        delta (- (.toEpochDay d) (.toEpochDay today))]
     (case delta
-      0 "Today"
-      1 "Tomorrow"
-      (let [n (str (.getDayOfWeek d))]
-        (str (subs n 0 1) (str/lower-case (subs n 1 3)))))))
+      0 (t :day/today)
+      1 (t :day/tomorrow)
+      ;; DayOfWeek numbers Monday 1 .. Sunday 7, and so does :day/short
+      (nth (t :day/short) (dec (.getValue (.getDayOfWeek d)))))))
 
 (defn- wind-arrow
   "Meteorological direction is where the wind comes *from*."
   [deg-from]
   (when deg-from
-    (nth ["N" "NE" "E" "SE" "S" "SW" "W" "NW"]
+    (nth (t :wind/points)
          (mod (Math/round (/ (double deg-from) 45.0)) 8))))
 
 ;; ---------------------------------------------------------------------------
@@ -217,13 +227,13 @@
                       (range (count (:time daily))))
       ;; "Feels like" deliberately absent: the hero already says it, and a
       ;; duplicated row is both noise and a screen-height it does not earn.
-      :details  [{:title "Humidity" :value (str (:relative_humidity_2m cur) "%")
+      :details  [{:title (t :detail/humidity) :value (str (:relative_humidity_2m cur) "%")
                   :icon "weather-showers-scattered-symbolic"}
-                 {:title "Wind" :value (str (speed (:wind_speed_10m cur) units)
-                                            " " (wind-arrow (:wind_direction_10m cur)))
+                 {:title (t :detail/wind) :value (str (speed (:wind_speed_10m cur) units)
+                                                      " " (wind-arrow (:wind_direction_10m cur)))
                   :icon "weather-windy-symbolic"}
                  ;; one row, not two: they are always read together
-                 {:title "Daylight"
+                 {:title (t :detail/daylight)
                   :value (str (hh:mm (first (:sunrise daily))) "  \u2192  "
                               (hh:mm (first (:sunset daily))))
                   :icon "daytime-sunrise-symbolic"}]
@@ -236,6 +246,6 @@
     (let [mins (quot (- now-ms fetched-at) 60000)]
       (when (>= mins 30)
         (cond
-          (< mins 120) (str "Showing data from " mins " minutes ago")
-          (< mins 2880) (str "Showing data from " (quot mins 60) " hours ago")
-          :else (str "Showing data from " (quot mins 1440) " days ago"))))))
+          (< mins 120)  (t :stale/minutes mins)
+          (< mins 2880) (t :stale/hours (quot mins 60))
+          :else         (t :stale/days (quot mins 1440)))))))

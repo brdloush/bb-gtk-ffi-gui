@@ -137,6 +137,8 @@ Pango escaping), `examples/deck.clj` the app.
 
 ![Weather](docs/weather.png)
 
+![Weather in Czech](docs/weather-cs.png)
+
 The colour is the point: weather code plus day/night picks one of 14 gradients,
 and changing conditions only swaps a CSS class. Big light type, an hourly strip
 that scrolls, a 7-day list, and a details group.
@@ -146,9 +148,18 @@ blocking main loop genuinely does nothing in between. Works offline too: the
 last response is cached, so the window opens with real content and an honest
 banner saying how old it is.
 
-`examples/weather.clj` is the UI, `examples/openmeteo.clj` the data, and
-`examples/weather_css.clj` the stylesheet -- kept apart because it is the whole
-reason the app looks designed rather than assembled.
+**English and Czech.** The language starts from `LANG` and the header switches
+it; the choice is saved next to the place and the units. Switching costs no
+network call: `openmeteo` builds the view model in whatever language is in
+force, so a switch is a rebuild from the response already cached. The
+geocoding search sends the language too, so a Czech search for Prague answers
+`Praha, Česko`.
+
+`examples/weather.clj` is the UI, `examples/openmeteo.clj` the data,
+`examples/weather_css.clj` the stylesheet and `examples/weather_i18n.clj` the
+strings -- kept apart because a translator should not have to read the app,
+and because the stylesheet is the whole reason it looks designed rather than
+assembled.
 
 ### System monitor
 
@@ -238,6 +249,7 @@ bb counter    # the glimmer counter
 bb todo       # dynamic list, entry, check buttons
 
 bb shot weather   # regenerate a screenshot (the app shoots itself)
+LANG=cs_CZ.UTF-8 bb shot weather docs/weather-cs.png   # the same, in Czech
 bb shot monitor
 bb shot deck
 bb shot babatype
@@ -575,6 +587,11 @@ Three small namespaces, plus two optional ones:
 | `src/gtk/core.clj` | 506 | hiccup -> widgets, plus a reconciler and the main loop |
 | `src/gtk/dev.clj` | 295 | dev-only: var watches, auto-refresh, file watching, screenshots |
 | `src/gtk/adw.clj` | 381 | optional: libadwaita bindings and 19 tags. Core does not know it exists |
+
+An app's own strings are its own business, so translation is not in `src/`.
+`examples/i18n.clj` is the whole mechanism -- a dictionary per language, `t`,
+and a root binding for the language in force -- and `examples/weather_i18n.clj`
+is what the weather app says in English and Czech.
 
 ### Rendering
 
@@ -916,6 +933,7 @@ are checking pointer identity and hiccup normalization respectively.
 | `screenshot_test.clj` | a PNG really is written, at the display's scale rather than the logical size; a single widget too; `later!` runs on the GTK thread, and `screenshot!` marshals itself there |
 | `openmeteo_test.clj` | all 28 WMO codes map to a label, icon and sky, day and night; formatting; the view model; the staleness banner's thresholds |
 | `weather_test.clj` | config defaults, round-trip and recovery from a corrupt file; the offline path builds a whole tree from cached data and the real temperature appears on screen |
+| `i18n_test.clj` | the locale is read from the environment and survives nonsense; the Czech dictionary covers every English key; a missing string falls back to English; one response renders in both languages with the numbers and icons untouched; Czech counts in three shapes (`3 hodiny`, `8 hodin`); the header switch rebuilds from the cache and is written to disk |
 | `input_test.clj` | keys arrive as names with modifiers; the return value decides whether the event stops; a throwing handler is contained and reports "not handled"; ordinary signals still work |
 | `motion_test.clj` | changing `:page` really animates rather than jumping, `:animate false` jumps, an unrelated re-render does not re-animate, and `nth-child` stops at the end of the sibling chain |
 | `deckmd_test.clj` | markdown to slides, Pango escaping (including an injection attempt), and every key-to-action transition |
